@@ -103,7 +103,7 @@ run_one() {
     --network=garnet --num-cpus="${NUM_CPUS}" --num-dirs="${NUM_DIRS}" \
     --topology="${topo}" ${topo_args}  \
     --inj-vnet=0 --synthetic="${traffic}" \
-    --sim-cycles="${SIM_CYCLES}" --injectionrate="${rate}" --escape-vc \
+    --sim-cycles="${SIM_CYCLES}" --injectionrate="${rate}" --escape-vc --routing-algorithm=4 \
     > "${OUTDIR}/gem5.log" 2>&1
   #--link-latency=2 --router-latency=2
   # Parse stats if present

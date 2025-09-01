@@ -259,12 +259,12 @@ void GarnetNetwork::buildEscapeTree()
         }
         // Print the children (vector children info)
         for (const auto& child : RU.getChildren()) {
-            DPRINTF(RubyNetwork, "Router %d has child outport %d (tin=%d, tout=%d)\n",
-                    u, RU.getDirection(child.outport), child.tin, child.tout);
+            DPRINTF(RubyNetwork, "Router %d has child outport idx %d dir %s (tin=%d, tout=%d)\n",
+                    u, child.outport, RU.getDirection(child.outport).c_str(), child.tin, child.tout);
         }
         // Print the parent
-        DPRINTF(RubyNetwork, "Router %d has parent outport %d with direction %d\n",
-                u, RU.getParentOutport(), RU.getParentOutportDirection());
+        DPRINTF(RubyNetwork, "Router %d has parent outport %d dir %s\n",
+                u, RU.getParentOutport(), RU.getParentOutportDirection().c_str());
     }
 }
 

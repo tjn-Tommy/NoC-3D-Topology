@@ -226,6 +226,20 @@ OutputUnit::insert_flit(flit *t_flit)
 {
     outBuffer.insert(t_flit);
     m_out_link->scheduleEventAbsolute(m_router->clockEdge(Cycles(1)));
+
+    // Update CAR-3D EWMA with latest observed credits for this outport/vnet
+    // Compute vnet from assigned outvc
+    int vnet = t_flit->get_vc() / m_vc_per_vnet;
+    if (vnet >= 0 && vnet < (int)m_router->get_num_vnets()) {
+        const bool escape_en = is_escape_vc_enabled();
+        int base = vnet * m_vc_per_vnet;
+        int sum = 0;
+        for (int off = 0; off < m_vc_per_vnet; ++off) {
+            if (escape_en && off == 0) continue;
+            sum += get_credit_count(base + off);
+        }
+        m_router->getRoutingUnit().updateEwma(m_id, vnet, sum);
+    }
 }
 
 bool

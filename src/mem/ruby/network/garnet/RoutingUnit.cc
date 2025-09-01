@@ -34,8 +34,11 @@
 #include "base/compiler.hh"
 #include "debug/RubyNetwork.hh"
 #include "mem/ruby/network/garnet/InputUnit.hh"
+#include "mem/ruby/network/garnet/OutputUnit.hh"
 #include "mem/ruby/network/garnet/Router.hh"
 #include "mem/ruby/slicc_interface/Message.hh"
+
+#include <tuple>
 
 namespace gem5
 {
@@ -193,6 +196,10 @@ RoutingUnit::outportCompute(RouteInfo route, int inport,
         // any custom algorithm
         case CUSTOM_: outport =
             outportComputeCustom(route, inport, inport_dirn); break;
+        case CAR3D_: outport =
+            outportComputeCar3D(route, inport, inport_dirn); break;
+        case ADAPTIVE_: outport =
+            outportComputeAdaptive(route, inport, inport_dirn); break;
         default: outport =
             lookupRoutingTable(route.vnet, route.net_dest); break;
     }
@@ -318,6 +325,205 @@ RoutingUnit::outportComputeCustom(RouteInfo route,
                                  PortDirection inport_dirn)
 {
     panic("%s placeholder executed", __FUNCTION__);
+}
+
+int
+RoutingUnit::outportComputeAdaptive(RouteInfo route,
+                                 int inport,
+                                 PortDirection inport_dirn)
+{
+    // If destination NI is attached to this router, use LOCAL outport from table
+    if (route.dest_router == m_router->get_id()) {
+        return lookupRoutingTable(route.vnet, route.net_dest);
+    }
+
+    // 1) Collect minimal outport candidates using the routing table
+    const int vnet = route.vnet;
+    if (vnet < 0 || vnet >= (int)m_routing_table.size()) {
+        // Fallback: use table directly if vnet is out of range
+        return lookupRoutingTable(route.vnet, route.net_dest);
+    }
+
+    int min_weight = INFINITE_;
+    std::vector<int> candidates;
+    candidates.reserve(m_routing_table[vnet].size());
+
+    // Find minimum link weight among links that can reach destination
+    for (int link = 0; link < (int)m_routing_table[vnet].size(); link++) {
+        if (route.net_dest.intersectionIsNotEmpty(m_routing_table[vnet][link])) {
+            if (m_weight_table[link] <= min_weight)
+                min_weight = m_weight_table[link];
+        }
+    }
+    // Collect links whose weight == min_weight and that reach the destination
+    for (int link = 0; link < (int)m_routing_table[vnet].size(); link++) {
+        if (route.net_dest.intersectionIsNotEmpty(m_routing_table[vnet][link])) {
+            if (m_weight_table[link] == min_weight) {
+                candidates.push_back(link);
+            }
+        }
+    }
+
+    if (candidates.empty()) {
+        // No route exists; keep behavior consistent with TABLE_ mode
+        fatal("Fatal Error:: No Route exists from this Router.");
+        return -1;
+    }
+
+    // 2) If only one candidate, use it
+    if (candidates.size() == 1) {
+        return candidates.front();
+    }
+
+    // 3) Rank candidates by downstream free credits on this vnet (exclude escape VC)
+    auto creditScore = [&](int outport) -> int {
+        auto *outU = m_router->getOutputUnit(outport);
+        if (!outU) return -1; // prefer any valid over invalid
+        const int vcs_per_vnet = m_router->get_vc_per_vnet();
+        const bool escape_en   = m_router->is_escape_vc_enabled();
+        int base = vnet * vcs_per_vnet;
+        int sum = 0;
+        for (int off = 0; off < vcs_per_vnet; ++off) {
+            if (escape_en && off == 0) continue; // exclude escape
+            sum += outU->get_credit_count(base + off);
+        }
+        return sum;
+    };
+
+    int best = candidates.front();
+    int bestScore = creditScore(best);
+
+    for (size_t i = 1; i < candidates.size(); ++i) {
+        int c = candidates[i];
+        int s = creditScore(c);
+        if (s > bestScore) {
+            best = c; bestScore = s;
+        }
+    }
+
+    // 4) Tie-break using per-inport round-robin among top-scored candidates
+    // Collect equal-top candidates
+    std::vector<int> top;
+    top.reserve(candidates.size());
+    for (int c : candidates) {
+        if (creditScore(c) == bestScore) top.push_back(c);
+    }
+    if (top.size() == 1) return top.front();
+
+    unsigned &rr = m_rr_by_inport[inport];
+    int choice = top[rr % top.size()];
+    rr++;
+    return choice;
+}
+
+void RoutingUnit::ensureEwmaSized()
+{
+    const int num_outports = m_outports_idx2dirn.size();
+    const int num_vnets = m_router->get_num_vnets();
+    if ((int)m_outport_ewma.size() != num_outports) {
+        m_outport_ewma.resize(num_outports);
+    }
+    for (int op = 0; op < num_outports; ++op) {
+        if ((int)m_outport_ewma[op].size() != num_vnets) {
+            m_outport_ewma[op].assign(num_vnets, 0.0);
+        }
+    }
+}
+
+void RoutingUnit::updateEwma(int outport, int vnet, int observedCredits)
+{
+    ensureEwmaSized();
+    if (outport < 0 || outport >= (int)m_outport_ewma.size()) return;
+    if (vnet < 0 || vnet >= (int)m_outport_ewma[outport].size()) return;
+    constexpr double lambda = 0.2; // smoothing factor
+    double &ew = m_outport_ewma[outport][vnet];
+    ew = (1.0 - lambda) * ew + lambda * (double)observedCredits;
+}
+
+int
+RoutingUnit::outportComputeCar3D(RouteInfo route,
+                                 int inport,
+                                 PortDirection inport_dirn)
+{
+    // If destination NI is attached to this router, use LOCAL outport from table
+    if (route.dest_router == m_router->get_id()) {
+        return lookupRoutingTable(route.vnet, route.net_dest);
+    }
+
+    const int vnet = route.vnet;
+    if (vnet < 0 || vnet >= (int)m_routing_table.size()) {
+        return lookupRoutingTable(route.vnet, route.net_dest);
+    }
+
+    // Build minimal candidate set using table min-weight filtering
+    int min_weight = INFINITE_;
+    std::vector<int> candidates;
+    for (int link = 0; link < (int)m_routing_table[vnet].size(); link++) {
+        if (route.net_dest.intersectionIsNotEmpty(m_routing_table[vnet][link])) {
+            if (m_weight_table[link] <= min_weight)
+                min_weight = m_weight_table[link];
+        }
+    }
+    for (int link = 0; link < (int)m_routing_table[vnet].size(); link++) {
+        if (route.net_dest.intersectionIsNotEmpty(m_routing_table[vnet][link]) &&
+            m_weight_table[link] == min_weight) {
+            candidates.push_back(link);
+        }
+    }
+    if (candidates.empty()) {
+        fatal("Fatal Error:: No Route exists from this Router.");
+        return -1;
+    }
+    if (candidates.size() == 1) return candidates.front();
+
+    ensureEwmaSized();
+
+    auto localCredits = [&](int outport) -> int {
+        auto *outU = m_router->getOutputUnit(outport);
+        if (!outU) return -1;
+        const int vcs_per_vnet = m_router->get_vc_per_vnet();
+        const bool escape_en   = m_router->is_escape_vc_enabled();
+        int base = vnet * vcs_per_vnet;
+        int sum = 0;
+        for (int off = 0; off < vcs_per_vnet; ++off) {
+            if (escape_en && off == 0) continue; // exclude escape VC
+            sum += outU->get_credit_count(base + off);
+        }
+        return sum;
+    };
+
+    constexpr double alpha = 1.0;
+    constexpr double beta  = 0.5;
+
+    // Compute best score
+    double bestScore = -1e18;
+    for (int c : candidates) {
+        double score = alpha * (double)localCredits(c) + beta * m_outport_ewma[c][vnet];
+        if (score > bestScore) bestScore = score;
+    }
+
+    // Keep only top-scored candidates (within epsilon)
+    const double eps = 1e-9;
+    std::vector<int> top;
+    for (int c : candidates) {
+        double score = alpha * (double)localCredits(c) + beta * m_outport_ewma[c][vnet];
+        if (score + eps >= bestScore) top.push_back(c);
+    }
+
+    // Stickiness: prefer last choice if it is still in top set
+    std::tuple<int,int,int> key{inport, vnet, route.dest_router};
+    auto it = m_lastChoice.find(key);
+    if (it != m_lastChoice.end()) {
+        int last = it->second;
+        for (int c : top) if (c == last) return last;
+    }
+
+    // Round-robin among top candidates
+    unsigned &rr = m_rr_by_inport[inport];
+    int choice = top[rr % top.size()];
+    rr++;
+    m_lastChoice[key] = choice;
+    return choice;
 }
 
 } // namespace garnet

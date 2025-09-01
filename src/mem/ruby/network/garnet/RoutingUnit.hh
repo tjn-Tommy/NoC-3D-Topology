@@ -37,6 +37,10 @@
 #include "mem/ruby/network/garnet/GarnetNetwork.hh"
 #include "mem/ruby/network/garnet/flit.hh"
 
+#include <map>
+#include <tuple>
+#include <vector>
+
 namespace gem5
 {
 
@@ -78,6 +82,16 @@ class RoutingUnit
                              int inport,
                              PortDirection inport_dirn);
 
+    // CAR-3D: EWMA + lookahead-inspired scoring
+    int outportComputeCar3D(RouteInfo route,
+                            int inport,
+                            PortDirection inport_dirn);
+
+    // Adaptive Routing Algorithm using Port Directions
+    int outportComputeAdaptive(RouteInfo route,
+                               int inport,
+                               PortDirection inport_dirn);
+
     // --- add near the top of class RoutingUnit public: ---
     int outportEscapeVC(RouteInfo route, int inport, PortDirection inport_dirn);
     int outportIndex(PortDirection dir) const {
@@ -109,11 +123,16 @@ class RoutingUnit
         return getDirection(m_parentOutport);
     }
 
+    // CAR-3D EWMA updater (called from OutputUnit on send)
+    void updateEwma(int outport, int vnet, int observedCredits);
+
   private:
     Router *m_router;
     int m_treeDepth = -1;
     int m_parentOutport = -1;
     std::vector<ChildInfo> m_children;
+    // Tie-breaker state for adaptive selection (per inport)
+    std::map<int, unsigned> m_rr_by_inport;
 
     // Routing Table
     std::vector<std::vector<NetDest>> m_routing_table;
@@ -124,6 +143,13 @@ class RoutingUnit
     std::map<int, PortDirection> m_inports_idx2dirn;
     std::map<int, PortDirection> m_outports_idx2dirn;
     std::map<PortDirection, int> m_outports_dirn2idx;
+
+    // CAR-3D state
+    // Per-outport, per-vnet EWMA of observed free credits
+    std::vector<std::vector<double>> m_outport_ewma; // [outport][vnet]
+    std::map<std::tuple<int,int,int>, int> m_lastChoice; // key=(inport,vnet,dst)
+
+    void ensureEwmaSized();
 };
 
 } // namespace garnet

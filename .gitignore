@@ -34,3 +34,4 @@ configs/dram/lowp_sweep.cfg
 .vscode
 lab4/
 AGENTS.md
+.gitignore

@@ -50,8 +50,14 @@ enum VC_state_type {IDLE_, VC_AB_, ACTIVE_, NUM_VC_STATE_TYPE_};
 enum VNET_type {CTRL_VNET_, DATA_VNET_, NULL_VNET_, NUM_VNET_TYPE_};
 enum flit_stage {I_, VA_, SA_, ST_, LT_, NUM_FLIT_STAGE_};
 enum link_type { EXT_IN_, EXT_OUT_, INT_, NUM_LINK_TYPES_ };
-enum RoutingAlgorithm { TABLE_ = 0, XY_ = 1, CUSTOM_ = 2,
-                        NUM_ROUTING_ALGORITHM_};
+enum RoutingAlgorithm {
+    TABLE_   = 0,
+    XY_      = 1,
+    CUSTOM_  = 2,
+    ADAPTIVE_ = 3,  // adaptive minimal, credit-aware (3D-ready)
+    CAR3D_    = 4,  // CAR-3D: EWMA + lookahead-inspired scoring
+    NUM_ROUTING_ALGORITHM_
+};
 
 struct RouteInfo
 {

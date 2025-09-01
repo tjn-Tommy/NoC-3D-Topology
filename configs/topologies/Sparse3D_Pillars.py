@@ -69,6 +69,7 @@ class Sparse3D_Pillars(SimpleTopology):
 
         # ----- Link Latencies -----
         link_latency = options.link_latency
+        vlink_latency = max(1, link_latency // VLINK_SPEEDUP)
         router_latency = options.router_latency
 
         # ----- Router Creation -----
