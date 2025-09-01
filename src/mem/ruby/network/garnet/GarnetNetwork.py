@@ -48,6 +48,7 @@ class GarnetNetwork(RubyNetwork):
     routing_algorithm = Param.Int(0, "0: Weight-based Table, 1: XY, 2: Custom")
     enable_fault_model = Param.Bool(False, "enable network fault model")
     fault_model = Param.FaultModel(NULL, "network fault model")
+    escape_vc_enabled = Param.Bool(False, "enable escape virtual channel")
     garnet_deadlock_threshold = Param.UInt32(
         50000, "network-level deadlock threshold"
     )

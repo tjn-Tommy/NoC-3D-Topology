@@ -76,6 +76,8 @@ GarnetNetwork::GarnetNetwork(const Params &p)
     if (m_enable_fault_model)
         fault_model = p.fault_model;
 
+    m_escape_vc_enabled = p.escape_vc_enabled;
+
     m_vnet_type.resize(m_virtual_networks);
 
     for (int i = 0 ; i < m_virtual_networks ; i++) {
@@ -149,6 +151,120 @@ GarnetNetwork::init()
             router->printAggregateFaultProbability(std::cout);
             router->printFaultVector(std::cout);
         }
+    }
+
+    // Escape VC: Build BFS tree
+    if (m_escape_vc_enabled) {
+        buildEscapeTree();
+    }
+}
+
+void GarnetNetwork::buildEscapeTree()
+{
+    const int N = m_routers.size();
+    if (N == 0) return;
+
+    // 1) Build adjacency from physical outports (ignore LOCAL)
+    std::vector<std::vector<std::pair<int,int>>> adj(N);
+    for (int u = 0; u < N; ++u) {
+        auto *R = m_routers[u];
+        const int nOut = R->get_num_outports();
+        for (int op = 0; op < nOut; ++op) {
+            auto dir = R->getOutportDirection(op);
+            if (dir == "Local") continue;
+            const int v = R->neighborIdByOutport(op);
+            if (v >= 0 && v < N) {
+                adj[u].push_back({op, v}); // (outport index, neighbor id)
+            }
+        }
+    }
+
+    // 2) BFS to build a *physical* spanning tree rooted at 0
+    std::vector<int> parent(N, -1);
+    std::vector<int> parentOutportAtChild(N, -1);
+    std::vector<std::vector<int>> children(N);
+    std::vector<char> seen(N, 0);
+    std::queue<int> q;
+    const int ROOT = 31;
+
+    seen[ROOT] = 1;
+    q.push(ROOT);
+    while (!q.empty()) {
+        int u = q.front(); q.pop();
+        for (auto [op, v] : adj[u]) {
+            if (seen[v]) continue;
+            // Tree edge u -> v
+            seen[v] = 1;
+            parent[v] = u;
+
+            // Outport at *child* to go UP to its parent:
+            // Note: This must be the *one-hop* port to reach the parent neighbor.
+            // We can find it by scanning child's outports for the back-edge.
+            int upOp = -1;
+            for (auto [op2, nb] : adj[v]) {
+                if (nb == u) { upOp = op2; break; }
+            }
+            assert(upOp != -1 && "Topology should be bidirectional");
+            parentOutportAtChild[v] = upOp;
+
+            children[u].push_back(v);
+            q.push(v);
+        }
+    }
+
+    // 3) Euler tour tin/tout for subtree membership
+    std::vector<int> tin(N, -1), tout(N, -1);
+    int timer = 0;
+    std::function<void(int)> dfs = [&](int u) {
+        tin[u] = timer++;
+        for (int v : children[u]) dfs(v);
+        tout[u] = timer;
+    };
+    dfs(ROOT);
+    m_tin_of_router = tin;
+    m_tout_of_router = tout;
+
+    // 4) Install into each RoutingUnit
+    for (int u = 0; u < N; ++u) {
+        auto &RU = m_routers[u]->getRoutingUnit();
+        // Fix: Set tree depth based on BFS distance, not uninitialized value
+        int depth = 0;
+        int curr = u;
+        while (parent[curr] != -1) {
+            depth++;
+            curr = parent[curr];
+        }
+        RU.setTreeDepth(depth);
+        RU.clearChildren();
+
+        // Parent outport at *this* router (UP direction)
+        if (u == ROOT) {
+            RU.setParentOutport(-1); // root has no parent
+        } else {
+            RU.setParentOutport(parentOutportAtChild[u]);
+        }
+
+        // Add children entries with (outport, tin, tout)
+        for (int v : children[u]) {
+            // outport at *u* to reach child v (DOWN direction)
+            int downOp = -1;
+            for (auto [op, nb] : adj[u]) {
+                if (nb == v) {
+                    downOp = op;
+                    break;
+                }
+            }
+            assert(downOp != -1);
+            RU.addChild(downOp, tin[v], tout[v]);
+        }
+        // Print the children (vector children info)
+        for (const auto& child : RU.getChildren()) {
+            DPRINTF(RubyNetwork, "Router %d has child outport %d (tin=%d, tout=%d)\n",
+                    u, RU.getDirection(child.outport), child.tin, child.tout);
+        }
+        // Print the parent
+        DPRINTF(RubyNetwork, "Router %d has parent outport %d with direction %d\n",
+                u, RU.getParentOutport(), RU.getParentOutportDirection());
     }
 }
 

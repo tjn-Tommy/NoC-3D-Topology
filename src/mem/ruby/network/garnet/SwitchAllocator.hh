@@ -63,9 +63,9 @@ class SwitchAllocator : public Consumer
     void print(std::ostream& out) const {};
     void arbitrate_inports();
     void arbitrate_outports();
-    bool send_allowed(int inport, int invc, int outport, int outvc);
+    bool send_allowed(int inport, int invc, int outport, int outvc, bool is_escape_vc_enabled);
     int vc_allocate(int outport, int inport, int invc);
-
+    void arbitrate_inports_escape();
     inline double
     get_input_arbiter_activity()
     {
@@ -77,6 +77,8 @@ class SwitchAllocator : public Consumer
         return m_output_arbiter_activity;
     }
 
+    bool is_escape_vc_enabled() const;
+
     void resetStats();
 
   private:
@@ -86,6 +88,7 @@ class SwitchAllocator : public Consumer
     double m_input_arbiter_activity, m_output_arbiter_activity;
 
     Router *m_router;
+    std::vector<bool> m_is_escape_req;
     std::vector<int> m_round_robin_invc;
     std::vector<int> m_round_robin_inport;
     std::vector<int> m_port_requests;

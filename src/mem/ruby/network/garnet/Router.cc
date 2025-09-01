@@ -147,7 +147,7 @@ Router::addOutPort(PortDirection outport_dirn,
 }
 
 PortDirection
-Router::getOutportDirection(int outport)
+Router::getOutportDirection(int outport) const
 {
     return m_output_unit[outport]->get_direction();
 }
@@ -185,6 +185,20 @@ Router::getPortDirectionName(PortDirection direction)
     // statement to convert direction to a string
     // that can be printed out
     return direction;
+}
+
+bool
+Router::is_escape_vc_enabled() const
+{
+    return m_network_ptr->isEscapeVcEnabled();
+}
+
+int
+Router::neighborIdByOutport(int outport) const
+{
+    auto dir = getOutportDirection(outport);
+    if (dir == "Local") return -1;
+    return m_output_unit[outport]->getDestRouterId();
 }
 
 void

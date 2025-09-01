@@ -84,6 +84,7 @@ class GarnetNetwork : public Network
     bool isFaultModelEnabled() const { return m_enable_fault_model; }
     FaultModel* fault_model;
 
+    bool isEscapeVcEnabled() const { return m_escape_vc_enabled; }
 
     // Internal configuration
     bool isVNetOrdered(int vnet) const { return m_ordered[vnet]; }
@@ -157,6 +158,11 @@ class GarnetNetwork : public Network
     void update_traffic_distribution(RouteInfo route);
     int getNextPacketID() { return m_next_packet_id++; }
 
+    int getTinIndex(int routerId) const { return m_tinIndex[routerId]; }
+    // Escape-tree helpers
+    int tinOf(int routerId) const { return m_tin_of_router[routerId]; }
+    int toutOf(int routerId) const { return m_tout_of_router[routerId]; }
+
   protected:
     // Configuration
     int m_num_rows;
@@ -167,6 +173,10 @@ class GarnetNetwork : public Network
     uint32_t m_buffers_per_data_vc;
     int m_routing_algorithm;
     bool m_enable_fault_model;
+    bool m_escape_vc_enabled;
+    std::vector<int> m_tinIndex;
+    std::vector<int> m_tin_of_router;
+    std::vector<int> m_tout_of_router;
 
     // Statistical variables
     statistics::Vector m_packets_received;
@@ -206,6 +216,7 @@ class GarnetNetwork : public Network
   private:
     GarnetNetwork(const GarnetNetwork& obj);
     GarnetNetwork& operator=(const GarnetNetwork& obj);
+    void buildEscapeTree();
 
     std::vector<VNET_type > m_vnet_type;
     std::vector<Router *> m_routers;   // All Routers in Network

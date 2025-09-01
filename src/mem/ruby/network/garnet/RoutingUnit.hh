@@ -78,13 +78,42 @@ class RoutingUnit
                              int inport,
                              PortDirection inport_dirn);
 
+    // --- add near the top of class RoutingUnit public: ---
+    int outportEscapeVC(RouteInfo route, int inport, PortDirection inport_dirn);
+    int outportIndex(PortDirection dir) const {
+        auto it = m_outports_dirn2idx.find(dir);
+        return (it == m_outports_dirn2idx.end()) ? -1 : it->second;
+    }
+
+    // Install escape-tree info per router
+    void setTreeDepth(int depth) { m_treeDepth = depth; }
+    int getTreeDepth() const { return m_treeDepth; }
+    void setParentOutport(int outport) { m_parentOutport = outport; }
+
+    struct ChildInfo { int outport; int tin; int tout; };
+    void clearChildren() { m_children.clear(); }
+    void addChild(int outport, int tin, int tout) { m_children.push_back({outport,tin,tout}); }
+    std::vector<ChildInfo> getChildren() const { return m_children; }
     // Returns true if vnet is present in the vector
     // of vnets or if the vector supports all vnets.
     bool supportsVnet(int vnet, std::vector<int> sVnets);
 
+    // Get the direction for idx
+    PortDirection getDirection(int idx) const {
+        auto it = m_outports_idx2dirn.find(idx);
+        return (it == m_outports_idx2dirn.end()) ? "INVALID" : it->second;
+    }
+
+    int getParentOutport() const { return m_parentOutport; }
+    PortDirection getParentOutportDirection() const {
+        return getDirection(m_parentOutport);
+    }
 
   private:
     Router *m_router;
+    int m_treeDepth = -1;
+    int m_parentOutport = -1;
+    std::vector<ChildInfo> m_children;
 
     // Routing Table
     std::vector<std::vector<NetDest>> m_routing_table;

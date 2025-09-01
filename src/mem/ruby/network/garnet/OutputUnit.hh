@@ -69,6 +69,10 @@ class OutputUnit : public Consumer
     bool has_credit(int out_vc);
     bool has_free_vc(int vnet);
     int select_free_vc(int vnet);
+    int set_escape_vc(int vnet);
+    bool has_free_escape_vc(int vnet);
+    inline NetworkLink* getOutLink() const { return m_out_link; }
+    int getDestRouterId() const { return m_dest_router_id; }
 
     inline PortDirection get_direction() { return m_direction; }
 
@@ -98,6 +102,8 @@ class OutputUnit : public Consumer
 
     void insert_flit(flit *t_flit);
 
+    bool is_escape_vc_enabled() const;
+
     inline int
     getVcsPerVnet()
     {
@@ -109,6 +115,7 @@ class OutputUnit : public Consumer
 
   private:
     Router *m_router;
+    int m_dest_router_id{-1};
     GEM5_CLASS_VAR_USED int m_id;
     PortDirection m_direction;
     int m_vc_per_vnet;

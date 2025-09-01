@@ -290,6 +290,10 @@ NetworkInterface::wakeup()
             if (t_credit->is_free_signal()) {
                 outVcState[t_credit->get_vc()].setState(IDLE_,
                     curTick());
+                if (t_credit->get_vc() == 0) {
+                    DPRINTF(RubyNetwork, "Credit %s is free for escape VC 0\n",
+                            *t_credit);
+                }
             }
             delete t_credit;
         }
@@ -459,11 +463,17 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
 int
 NetworkInterface::calculateVC(int vnet)
 {
-    for (int i = 0; i < m_vc_per_vnet; i++) {
+    for (int i = m_net_ptr->isEscapeVcEnabled() ? 1 : 0; i < m_vc_per_vnet; i++) {
         int delta = m_vc_allocator[vnet];
+
+        if (delta == 0 && m_net_ptr->isEscapeVcEnabled()){
+            delta = 1;
+            m_vc_allocator[vnet] = 1;
+        }
+
         m_vc_allocator[vnet]++;
         if (m_vc_allocator[vnet] == m_vc_per_vnet)
-            m_vc_allocator[vnet] = 0;
+            m_vc_allocator[vnet] = m_net_ptr->isEscapeVcEnabled() ? 1 : 0;
 
         if (outVcState[(vnet*m_vc_per_vnet) + delta].isInState(
                     IDLE_, curTick())) {

@@ -44,7 +44,7 @@ def define_options(parser):
     parser.add_argument(
         "--mesh-rows",
         type=int,
-        default=0,
+        default=4,
         help="the number of rows in the mesh topology",
     )
     parser.add_argument(
@@ -119,6 +119,20 @@ def define_options(parser):
             channel for each virtual network""",
     )
 
+    parser.add_argument(
+        "--escape-vc",
+        default=False,
+        action="store_true",
+        help="Enable escape virtual channel",
+    )
+
+    parser.add_argument(
+        "--escape-fallback-wait",
+        type=int,
+        default=0,
+        help="Wait time for escape virtual channel fallback",
+    )
+
 
 def create_network(options, ruby):
 
@@ -169,6 +183,8 @@ def init_network(options, network, InterfaceClass):
         network.ni_flit_size = options.link_width_bits / 8
         network.routing_algorithm = options.routing_algorithm
         network.garnet_deadlock_threshold = options.garnet_deadlock_threshold
+        network.escape_vc_enabled = options.escape_vc
+        # network.escape_fallback_wait = options.escape_fallback_wait
 
         # Create Bridges and connect them to the corresponding links
         for intLink in network.int_links:

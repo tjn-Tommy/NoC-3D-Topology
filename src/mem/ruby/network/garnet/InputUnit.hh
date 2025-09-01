@@ -63,6 +63,8 @@ class InputUnit : public Consumer
 
     inline PortDirection get_direction() { return m_direction; }
 
+    inline Router* getRouter() { return m_router; }
+
     inline void
     set_vc_idle(int vc, Tick curTime)
     {

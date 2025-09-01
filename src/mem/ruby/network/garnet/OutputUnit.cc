@@ -34,6 +34,7 @@
 #include "debug/RubyNetwork.hh"
 #include "mem/ruby/network/garnet/Credit.hh"
 #include "mem/ruby/network/garnet/CreditLink.hh"
+#include "mem/ruby/network/garnet/InputUnit.hh"
 #include "mem/ruby/network/garnet/Router.hh"
 #include "mem/ruby/network/garnet/flitBuffer.hh"
 
@@ -99,6 +100,8 @@ OutputUnit::has_free_vc(int vnet)
 {
     int vc_base = vnet*m_vc_per_vnet;
     for (int vc = vc_base; vc < vc_base + m_vc_per_vnet; vc++) {
+        if (is_escape_vc_enabled() && (vc == vc_base + 0))
+            continue;
         if (is_vc_idle(vc, curTick()))
             return true;
     }
@@ -112,6 +115,8 @@ OutputUnit::select_free_vc(int vnet)
 {
     int vc_base = vnet*m_vc_per_vnet;
     for (int vc = vc_base; vc < vc_base + m_vc_per_vnet; vc++) {
+        if (is_escape_vc_enabled() && (vc == vc_base + 0))
+            continue;
         if (is_vc_idle(vc, curTick())) {
             outVcState[vc].setState(ACTIVE_, curTick());
             return vc;
@@ -119,6 +124,40 @@ OutputUnit::select_free_vc(int vnet)
     }
 
     return -1;
+}
+
+bool
+OutputUnit::has_free_escape_vc(int vnet)
+{
+    int vc_base = vnet*m_vc_per_vnet;
+    return is_escape_vc_enabled() && is_vc_idle(vc_base, curTick());
+}
+
+int
+OutputUnit::set_escape_vc(int vnet)
+{
+    int vc = vnet*m_vc_per_vnet + 0;
+    // Require IDLE before allocating escape VC to a new packet.
+    // Do NOT reuse an ACTIVE escape VC for a different packet,
+    // even if it has credits; that breaks VC exclusivity and can
+    // lead to deadlock or head-of-line blocking.
+    if (is_vc_idle(vc, curTick())) {
+        outVcState[vc].setState(ACTIVE_, curTick());
+        DPRINTF(RubyNetwork, "OutputUnit at Router %d set escape VC %d to ACTIVE (was IDLE)\n",
+                m_router->get_id(), vc);
+        return vc;
+    } else {
+        DPRINTF(RubyNetwork, "OutputUnit at Router %d FAILED to set escape VC %d (not IDLE)\n",
+                m_router->get_id(), vc);
+        return -1;
+    }
+}
+
+
+bool
+OutputUnit::is_escape_vc_enabled() const
+{
+    return m_router->is_escape_vc_enabled();
 }
 
 /*
@@ -136,8 +175,14 @@ OutputUnit::wakeup()
         Credit *t_credit = (Credit*) m_credit_link->consumeLink();
         increment_credit(t_credit->get_vc());
 
-        if (t_credit->is_free_signal())
+        if (t_credit->is_free_signal()){
             set_vc_state(IDLE_, t_credit->get_vc(), curTick());
+            if (t_credit->get_vc() == 0) {
+                DPRINTF(RubyNetwork, "Credit %s is free for escape VC 0\n",
+                        *t_credit);
+            }
+        }
+
 
         delete t_credit;
 
@@ -157,6 +202,17 @@ void
 OutputUnit::set_out_link(NetworkLink *link)
 {
     m_out_link = link;
+    // Deduce the sink Router from the link's consumer (set on the dest side)
+    if (auto *cons = m_out_link->getLinkConsumer()) {
+        if (auto *sink_router = dynamic_cast<gem5::ruby::garnet::Router*>(cons)) {
+            m_dest_router_id = sink_router->get_id();
+        } else {
+            // Non-router consumer (e.g., NI for "Local")
+            m_dest_router_id = -1;
+        }
+    } else {
+        m_dest_router_id = -1;
+    }
 }
 
 void

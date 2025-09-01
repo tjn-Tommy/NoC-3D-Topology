@@ -260,6 +260,56 @@ RoutingUnit::outportComputeXY(RouteInfo route,
     return m_outports_dirn2idx[outport_dirn];
 }
 
+int
+RoutingUnit::outportEscapeVC(RouteInfo route, int inport, PortDirection inport_dirn)
+{
+    // If the destination is attached here, use the LOCAL outport selected by table
+    if (route.dest_router == m_router->get_id()) {
+        return lookupRoutingTable(route.vnet, route.net_dest);
+    }
+
+    // We need to know whether dest is in one of my child subtrees.
+    // We encode subtree membership using Euler-tour tin/tout numbers that
+    // GarnetNetwork will install via addChild(outport, tin, tout).
+    const int dest = route.dest_router;
+    const int destTin =
+        m_router->get_net_ptr()->tinOf(dest);  // <-- get Euler time of dest
+    const int destTout =
+        m_router->get_net_ptr()->toutOf(dest);  // <-- get Euler time of dest
+
+    // Prefer DOWN if the destination is in some child's subtree.
+    // Use inclusive Euler-tour membership: [tin, tout)
+    // i.e., tin(child) <= tin(dest) < tout(child)
+    // This ensures we also match when dest is exactly the child.
+    // DOWN traffic can only go DOWN - this breaks UP->DOWN cycles
+    for (const auto &c : m_children) {
+        if (destTin >= c.tin && destTin < c.tout) {
+            DPRINTF(RubyNetwork, "RoutingUnit at Router %d "
+                                 "routing DOWN to child via outport %d\n",
+                    m_router->get_id(), c.outport);
+
+            return c.outport; // DOWN edge
+        }
+    }
+
+    // Otherwise, go UP toward the parent (if not root)
+    // UP traffic can continue UP or go DOWN, but with priority ordering
+    if (m_parentOutport != -1) {
+        DPRINTF(RubyNetwork, "RoutingUnit at Router %d "
+                                        "routing UP to parent via outport %d\n",
+                            m_router->get_id(), m_parentOutport);
+
+        return m_parentOutport;
+    }
+
+    // Root without a suitable child: fall back to table minimal (safe at root)
+    DPRINTF(RubyNetwork, "RoutingUnit at Router %d "
+                         "falling back to original routing (ROOT)\n",
+            m_router->get_id());
+
+    return lookupRoutingTable(route.vnet, route.net_dest);
+}
+
 // Template for implementing custom routing algorithm
 // using port directions. (Example adaptive)
 int

@@ -113,7 +113,7 @@ class Router : public BasicRouter, public Consumer
 
     int getBitWidth() { return m_bit_width; }
 
-    PortDirection getOutportDirection(int outport);
+    PortDirection getOutportDirection(int outport) const;
     PortDirection getInportDirection(int inport);
 
     int route_compute(RouteInfo route, int inport, PortDirection direction);
@@ -138,6 +138,19 @@ class Router : public BasicRouter, public Consumer
         return m_network_ptr->fault_model->fault_prob(m_id, temperature,
                                                       aggregate_fault_prob);
     }
+
+    bool is_escape_vc_enabled() const;
+    // For Escape Tree Routing
+    int escape_route_compute(RouteInfo route, int inport, PortDirection dir) {
+        return routingUnit.outportEscapeVC(route, inport, dir);
+    }
+
+    // Direction ↔ outport queries for setup
+    int outportIndexByDirection(PortDirection dir) const {
+        return routingUnit.outportIndex(dir);
+    }
+    RoutingUnit& getRoutingUnit() { return routingUnit; }
+    int neighborIdByOutport(int outport) const;
 
     bool functionalRead(Packet *pkt, WriteMask &mask);
     uint32_t functionalWrite(Packet *);
