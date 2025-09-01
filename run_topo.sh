@@ -28,7 +28,7 @@ JOBS="$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)"
 SYNTHETIC_PATTERNS=(uniform_random) #tornado shuffle transpose neighbor)
 
 # Injection rates to sweep (0.02 -> 0.50 step 0.02)
-INJECTION_RATES=$(seq 0.02 0.02 0.50)
+INJECTION_RATES=$(seq 0.02 0.02 0.70)
 
 # Topologies to sweep. Each entry is "TOPOLOGY|EXTRA_ARGS"
 # Edit/add as needed (you can include your custom ones here).
@@ -36,6 +36,8 @@ TOPOLOGY_MATRIX=(
   "Mesh3D_XYZ|--mesh-rows=4"
   "Mesh_XY|--mesh-rows=8"
   "Sparse3D_Pillars|--mesh-rows=4"
+  "Torus3D|--mesh-rows=4"
+  "Sparse3D_Pillars_torus|--mesh-rows=4"
   # Example: custom 3D (adjust args to match your config)
   # "Mesh3D|--mesh-rows=4 --mesh-cols=4 --mesh-depth=4"
   # Example: your custom topology name with params
