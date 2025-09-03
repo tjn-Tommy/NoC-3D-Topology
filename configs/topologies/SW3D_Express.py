@@ -50,7 +50,7 @@ EXP_SPAN_Y = 2
 EXP_SPAN_Z = 2
 
 # Express link latency speedup: exp_latency = link_latency // EXP_LINK_SPEEDUP (>=1)
-EXP_LINK_SPEEDUP = 1  # 1 = no speedup
+EXP_LINK_SPEEDUP = 1 
 
 
 class SW3D_Express(SimpleTopology):
@@ -85,9 +85,15 @@ class SW3D_Express(SimpleTopology):
         # ===== timing =====
         link_latency = int(options.link_latency)
         router_latency = int(options.router_latency)
+        # TSV: Z latency = link_latency * SLOWDOWN / SPEEDUP
+        tsv_slowdown = max(1, int(getattr(options, "tsv_slowdown", 4)))
+        tsv_speedup = max(1, int(getattr(options, "tsv_speedup", 1)))
 
         # express link latency (optionally faster)
-        exp_latency = max(1, link_latency // max(1, int(EXP_LINK_SPEEDUP)))
+        exp_latency_xy = max(1, link_latency // max(1, int(EXP_LINK_SPEEDUP)))
+        # vertical base and express latencies honor TSV slowdown/speedup
+        base_latency_z = max(1, int(link_latency) * tsv_slowdown // tsv_speedup)
+        exp_latency_z = max(1, base_latency_z // max(1, int(EXP_LINK_SPEEDUP)))
 
         # ===== routers =====
         routers = [
@@ -213,7 +219,7 @@ class SW3D_Express(SimpleTopology):
                             dst_node=routers[b],
                             src_outport="Up",
                             dst_inport="Down",
-                            latency=link_latency,
+                            latency=base_latency_z,
                             weight=W_Z,
                         )
                     )
@@ -225,7 +231,7 @@ class SW3D_Express(SimpleTopology):
                             dst_node=routers[a],
                             src_outport="Down",
                             dst_inport="Up",
-                            latency=link_latency,
+                            latency=base_latency_z,
                             weight=W_Z,
                         )
                     )
@@ -249,7 +255,7 @@ class SW3D_Express(SimpleTopology):
                                     dst_node=routers[b],
                                     src_outport="EastExp",
                                     dst_inport="WestExp",
-                                    latency=exp_latency,
+                                    latency=exp_latency_xy,
                                     weight=W_EXP_X,
                                 )
                             )
@@ -261,7 +267,7 @@ class SW3D_Express(SimpleTopology):
                                     dst_node=routers[a],
                                     src_outport="WestExp",
                                     dst_inport="EastExp",
-                                    latency=exp_latency,
+                                    latency=exp_latency_xy,
                                     weight=W_EXP_X,
                                 )
                             )
@@ -282,7 +288,7 @@ class SW3D_Express(SimpleTopology):
                                     dst_node=routers[b],
                                     src_outport="NorthExp",
                                     dst_inport="SouthExp",
-                                    latency=exp_latency,
+                                    latency=exp_latency_xy,
                                     weight=W_EXP_Y,
                                 )
                             )
@@ -294,7 +300,7 @@ class SW3D_Express(SimpleTopology):
                                     dst_node=routers[a],
                                     src_outport="SouthExp",
                                     dst_inport="NorthExp",
-                                    latency=exp_latency,
+                                    latency=exp_latency_xy,
                                     weight=W_EXP_Y,
                                 )
                             )
@@ -315,7 +321,7 @@ class SW3D_Express(SimpleTopology):
                                     dst_node=routers[b],
                                     src_outport="UpExp",
                                     dst_inport="DownExp",
-                                    latency=exp_latency,
+                                    latency=exp_latency_z,
                                     weight=W_EXP_Z,
                                 )
                             )
@@ -327,7 +333,7 @@ class SW3D_Express(SimpleTopology):
                                     dst_node=routers[a],
                                     src_outport="DownExp",
                                     dst_inport="UpExp",
-                                    latency=exp_latency,
+                                    latency=exp_latency_z,
                                     weight=W_EXP_Z,
                                 )
                             )

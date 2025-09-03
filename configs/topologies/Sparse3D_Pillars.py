@@ -26,15 +26,13 @@ class Sparse3D_Pillars(SimpleTopology):
         LAYOUT_MODE = "aligned"
         WXP, WYP, WZP = 1, 2, 3
         WXN, WYN, WZN = 1, 2, 3
-        W_TOWARD = 1  # XY step that reduces |Δx|+|Δy| to the nearest pillar
-        W_Z = 3  # Up/Down
-        W_AWAY = 5  # XY step that increases that distance
         X, Y, Z = 4, 4, 4
-        # 垂直链路“加速”近似（只影响延迟，不影响权重）
-        VLINK_SPEEDUP = (
-            1  # vlink_latency = max(1, link_latency // VLINK_SPEEDUP)
-        )
-        VLINK_PARALLEL = 1  # Up/Down 方向的并行链路条数（近似更高带宽）
+        # 垂直链路延迟近似（只影响延迟，不影响权重）
+        # 语义：Z 延迟 = link_latency * SLOWDOWN / SPEEDUP
+        # SLOWDOWN: k>=1（默认 4）
+        # SPEEDUP:  m>=1（默认 1）
+        V_SLOWDOWN = max(1, int(getattr(options, "tsv_slowdown", 4)))
+        V_SPEEDUP = max(1, int(getattr(options, "tsv_speedup", 1)))
         # ------------------------------------
 
         assert (
@@ -69,7 +67,8 @@ class Sparse3D_Pillars(SimpleTopology):
 
         # ----- Link Latencies -----
         link_latency = options.link_latency
-        vlink_latency = max(1, link_latency // VLINK_SPEEDUP)
+        # 将 Z 向链路延迟放大为普通链路的 VLINK_SLOWDOWN 倍
+        vlink_latency = max(1, int(link_latency) * V_SLOWDOWN // max(1, V_SPEEDUP))
         router_latency = options.router_latency
 
         # ----- Router Creation -----
@@ -95,9 +94,9 @@ class Sparse3D_Pillars(SimpleTopology):
 
         # Connect external nodes (CPUs, etc.) to routers
         ext_links = []
-        for i, n in enumerate(nodes):
-            # controllers are distributed evenly to the routers
-            router_id = i % num_routers
+        for (i, n) in enumerate(network_nodes):
+            cntrl_level, router_id = divmod(i, num_routers)
+            assert cntrl_level < cntrls_per_router
             ext_links.append(
                 ExtLink(
                     link_id=link_count,
@@ -107,7 +106,6 @@ class Sparse3D_Pillars(SimpleTopology):
                 )
             )
             link_count += 1
-        network.ext_links = ext_links
 
         # Connect the remaining nodes to router 0. These should only be DMA nodes.
         for (i, node) in enumerate(remainder_nodes):
@@ -227,7 +225,7 @@ class Sparse3D_Pillars(SimpleTopology):
                                 dst_node=routers[b],
                                 src_outport="Up",
                                 dst_inport="Down",
-                                latency=link_latency,
+                                latency=vlink_latency,
                                 weight=WZN,
                             )
                         )
@@ -239,7 +237,7 @@ class Sparse3D_Pillars(SimpleTopology):
                                 dst_node=routers[a],
                                 src_outport="Down",
                                 dst_inport="Up",
-                                latency=link_latency,
+                                latency=vlink_latency,
                                 weight=WZP,
                             )
                         )

@@ -54,6 +54,12 @@ class Mesh3D_XYZ(SimpleTopology):
         link_latency = options.link_latency  # used by simple and garnet
         router_latency = options.router_latency  # only used by garnet
 
+        # TSV (Through-Silicon Via) latency for Z-axis links
+        # Z latency = link_latency * tsv_slowdown / tsv_speedup
+        tsv_slowdown = max(1, int(getattr(options, "tsv_slowdown", 4)))
+        tsv_speedup = max(1, int(getattr(options, "tsv_speedup", 1)))
+        tsv_latency = max(1, int(link_latency) * tsv_slowdown // tsv_speedup)
+
         # Fixed geometry: 4x4x4
         X, Y, Z = 4, 4, 4
         assert num_rows > 0
@@ -187,7 +193,7 @@ class Mesh3D_XYZ(SimpleTopology):
                     )
                     link_count += 1
 
-        # +Z / -Z (weight = 3)
+        # +Z / -Z (weight = 3) - Using TSV latency (slower than horizontal links)
         for y in range(Y):
             for x in range(X):
                 for z in range(Z - 1):
@@ -201,7 +207,7 @@ class Mesh3D_XYZ(SimpleTopology):
                             dst_node=routers[b],
                             src_outport="Up",
                             dst_inport="Down",
-                            latency=link_latency,
+                            latency=tsv_latency,
                             weight=WZ,
                         )
                     )
@@ -213,7 +219,7 @@ class Mesh3D_XYZ(SimpleTopology):
                             dst_node=routers[a],
                             src_outport="Down",
                             dst_inport="Up",
-                            latency=link_latency,
+                            latency=tsv_latency,
                             weight=WZ,
                         )
                     )

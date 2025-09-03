@@ -16,14 +16,8 @@ class Cluster3D_Hub(SimpleTopology):
     description = "Cluster3D_Hub"
 
     # ===================== 配置区（改这里就行） =====================
-    # 垂直加速倍数：Up/Down 链路延迟 = max(1, 全局link_latency // VLINK_SPEEDUP)
-    VLINK_SPEEDUP = 2  # 例：2 表示垂直延迟减半；1 表示不变
-
     # Hub 路由器加速倍数：Hub router 的流水线延迟 = max(1, 全局router_latency // HUB_SPEEDUP)
     HUB_SPEEDUP = 2  # 例：2 表示 Hub 延迟减半；1 表示不变
-
-    # 垂直并联链路条数：在 Up/Down 方向复制多条物理链路以近似更高带宽
-    VLINK_PARALLEL = 1  # 例：2 表示 Up/Down 各并联两条；1 表示单条
 
     # 簇大小（目前固定 2x2）
     CLUSTER_SIDE = 2
@@ -56,10 +50,12 @@ class Cluster3D_Hub(SimpleTopology):
         link_latency = int(options.link_latency)
         router_latency = int(options.router_latency)
 
-        # 应用“加速”近似
-        vlink_latency = max(1, link_latency // max(1, self.VLINK_SPEEDUP))
+        # 应用 TSV 近似（语义：Z延迟 = link_latency * SLOWDOWN / SPEEDUP）
+        tsv_slow = max(1, int(getattr(options, "tsv_slowdown", 4)))
+        tsv_fast = max(1, int(getattr(options, "tsv_speedup", 1)))
+
+        vlink_latency = max(1, int(link_latency) * tsv_slow // tsv_fast)
         hub_latency = max(1, router_latency // max(1, self.HUB_SPEEDUP))
-        vlink_parallel = max(1, int(self.VLINK_PARALLEL))
 
         # ------- id 编码：与 Mesh3D_XYZ_ 保持一致，便于 XYZ/DOR 使用 -------
         def hr_id(x, y, z):  # 普通水平路由器编号
@@ -210,40 +206,39 @@ class Cluster3D_Hub(SimpleTopology):
                     )
                     link_id += 1
 
-        # (C) HBR <-> HBR：竖直 Up/Down（体现“更快 + 并联”）
+        # (C) HBR <-> HBR：竖直 Up/Down（单链，延迟按 TSV 参数调整）
         #   权重=4（最后一维 Z）
         for z in range(Z - 1):
             for cy in range(Y // self.CLUSTER_SIDE):
                 for cx in range(X // self.CLUSTER_SIDE):
                     a = hbr_id(cx, cy, z)
                     b = hbr_id(cx, cy, z + 1)
-                    for k in range(vlink_parallel):
-                        # a -> b : Up(k)
-                        int_links.append(
-                            IntLink(
-                                link_id=link_id,
-                                src_node=routers[a],
-                                dst_node=routers[b],
-                                src_outport=f"Up{k}",
-                                dst_inport=f"Down{k}",
-                                latency=vlink_latency,
-                                weight=4,
-                            )
+                    # a -> b : Up
+                    int_links.append(
+                        IntLink(
+                            link_id=link_id,
+                            src_node=routers[a],
+                            dst_node=routers[b],
+                            src_outport="Up",
+                            dst_inport="Down",
+                            latency=vlink_latency,
+                            weight=4,
                         )
-                        link_id += 1
-                        # b -> a : Down(k)
-                        int_links.append(
-                            IntLink(
-                                link_id=link_id,
-                                src_node=routers[b],
-                                dst_node=routers[a],
-                                src_outport=f"Down{k}",
-                                dst_inport=f"Up{k}",
-                                latency=vlink_latency,
-                                weight=4,
-                            )
+                    )
+                    link_id += 1
+                    # b -> a : Down
+                    int_links.append(
+                        IntLink(
+                            link_id=link_id,
+                            src_node=routers[b],
+                            dst_node=routers[a],
+                            src_outport="Down",
+                            dst_inport="Up",
+                            latency=vlink_latency,
+                            weight=4,
                         )
-                        link_id += 1
+                    )
+                    link_id += 1
 
         network.int_links = int_links
 

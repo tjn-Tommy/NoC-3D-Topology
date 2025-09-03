@@ -73,6 +73,28 @@ def define_options(parser):
         in the topology file.""",
     )
     parser.add_argument(
+        "--vlink-slowdown",
+        action="store",
+        type=int,
+        default=4,
+        help="Multiply Z-axis (vertical/TSV) link latency by this factor.",
+    )
+    # Additional TSV controls (used by sparse/hub 3D topologies)
+    parser.add_argument(
+        "--tsv-slowdown",
+        action="store",
+        type=int,
+        default=4,
+        help="Multiply Z-link (TSV) latency by this factor (default: 4)",
+    )
+    parser.add_argument(
+        "--tsv-speedup",
+        action="store",
+        type=int,
+        default=1,
+        help="Divide Z-link (TSV) latency by this factor (effective latency = link_latency * SLOWDOWN / SPEEDUP; default: 1)",
+    )
+    parser.add_argument(
         "--link-width-bits",
         action="store",
         type=int,

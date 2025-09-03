@@ -76,8 +76,11 @@ class Hier3D_Chiplet(SimpleTopology):
         assert Z > 0
 
         # 基本延迟参数
-        link_latency = options.link_latency
-        router_latency = options.router_latency
+        link_latency = int(options.link_latency)
+        router_latency = int(options.router_latency)
+        tsv_slowdown = max(1, int(getattr(options, "tsv_slowdown", 4)))
+        tsv_speedup = max(1, int(getattr(options, "tsv_speedup", 1)))
+        vlink_latency = max(1, int(link_latency) * tsv_slowdown // tsv_speedup)
 
         # ------------- 分发路由器 -------------
         routers = [
@@ -173,6 +176,9 @@ class Hier3D_Chiplet(SimpleTopology):
 
         def add_link(src_id, dst_id, src_port, dst_port, w):
             nonlocal link_count
+            lat = vlink_latency if (
+                ("Up" in src_port) or ("Down" in src_port) or ("Up" in dst_port) or ("Down" in dst_port)
+            ) else link_latency
             int_links.append(
                 IntLink(
                     link_id=link_count,
@@ -180,7 +186,7 @@ class Hier3D_Chiplet(SimpleTopology):
                     dst_node=routers[dst_id],
                     src_outport=src_port,
                     dst_inport=dst_port,
-                    latency=link_latency,
+                    latency=lat,
                     weight=w,
                 )
             )

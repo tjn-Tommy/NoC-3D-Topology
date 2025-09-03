@@ -51,6 +51,10 @@ class Torus3D(SimpleTopology):
         # default values for link latency and router latency.
         link_latency = options.link_latency
         router_latency = options.router_latency
+        # Z-link (TSV) latency = link_latency * SLOWDOWN / SPEEDUP
+        tsv_slowdown = max(1, int(getattr(options, "tsv_slowdown", 4)))
+        tsv_speedup = max(1, int(getattr(options, "tsv_speedup", 1)))
+        vlink_latency = max(1, int(link_latency) * tsv_slowdown // tsv_speedup)
 
         # Create the routers
         routers = [Router(router_id=i, latency=router_latency) for i in range(num_routers)]
@@ -111,15 +115,15 @@ class Torus3D(SimpleTopology):
                     int_links.append(IntLink(link_id=link_count, src_node=routers[down_node], dst_node=routers[up_node], src_outport="South", dst_inport="North", latency=link_latency, weight=WY))
                     link_count += 1
 
-        # Up-Down links (Z dimension) with wraparound
+        # Up-Down links (Z dimension) with wraparound (TSV slower)
         for y in range(Y):
             for x in range(X):
                 for z in range(Z):
                     front_node = idx(x, y, z)
                     back_node = idx(x, y, (z + 1) % Z)
-                    int_links.append(IntLink(link_id=link_count, src_node=routers[front_node], dst_node=routers[back_node], src_outport="Up", dst_inport="Down", latency=link_latency, weight=WZ))
+                    int_links.append(IntLink(link_id=link_count, src_node=routers[front_node], dst_node=routers[back_node], src_outport="Up", dst_inport="Down", latency=vlink_latency, weight=WZ))
                     link_count += 1
-                    int_links.append(IntLink(link_id=link_count, src_node=routers[back_node], dst_node=routers[front_node], src_outport="Down", dst_inport="Up", latency=link_latency, weight=WZ))
+                    int_links.append(IntLink(link_id=link_count, src_node=routers[back_node], dst_node=routers[front_node], src_outport="Down", dst_inport="Up", latency=vlink_latency, weight=WZ))
                     link_count += 1
 
         network.int_links = int_links

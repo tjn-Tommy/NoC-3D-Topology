@@ -27,7 +27,9 @@ class Sparse3D_Pillars_torus(SimpleTopology):
         WXP, WYP, WZP = 1, 2, 3
         WXN, WYN, WZN = 1, 2, 3
         X, Y, Z = 4, 4, 4
-        VLINK_SPEEDUP = 1
+        # TSV latency multiplier and optional parallel links (sparse-only)
+        V_SLOWDOWN = max(1, int(getattr(options, "tsv_slowdown", 4)))
+        V_SPEEDUP = max(1, int(getattr(options, "tsv_speedup", 1)))
         # ------------------------------------
 
         assert (
@@ -45,7 +47,7 @@ class Sparse3D_Pillars_torus(SimpleTopology):
 
         # ----- Link Latencies -----
         link_latency = options.link_latency
-        vlink_latency = max(1, link_latency // VLINK_SPEEDUP)
+        vlink_latency = max(1, int(link_latency) * V_SLOWDOWN // max(1, V_SPEEDUP))
         router_latency = options.router_latency
 
         # ----- Router Creation -----
@@ -59,13 +61,30 @@ class Sparse3D_Pillars_torus(SimpleTopology):
 
         # ----- External Links -----
         ext_links = []
-        for i, n in enumerate(nodes):
-            router_id = i % num_routers
+        cntrls_per_router, remainder = divmod(len(nodes), num_routers)
+        network_nodes = nodes[: len(nodes) - remainder]
+        remainder_nodes = nodes[len(nodes) - remainder :]
+        for (i, n) in enumerate(network_nodes):
+            cntrl_level, router_id = divmod(i, num_routers)
+            assert cntrl_level < cntrls_per_router
             ext_links.append(
                 ExtLink(
                     link_id=link_count,
                     ext_node=n,
                     int_node=routers[router_id],
+                    latency=link_latency,
+                )
+            )
+            link_count += 1
+
+        for (i, node) in enumerate(remainder_nodes):
+            assert node.type == "DMA_Controller"
+            assert i < remainder
+            ext_links.append(
+                ExtLink(
+                    link_id=link_count,
+                    ext_node=node,
+                    int_node=routers[0],
                     latency=link_latency,
                 )
             )
@@ -137,7 +156,7 @@ class Sparse3D_Pillars_torus(SimpleTopology):
                     )
                     link_count += 1
 
-        # Z-links (Up/Down) only on pillars, with wraparound
+        # Z-links (Up/Down) only on pillars, with wraparound; single link with adjusted latency
         for y in range(Y):
             for x in range(X):
                 is_pillar_location = False
