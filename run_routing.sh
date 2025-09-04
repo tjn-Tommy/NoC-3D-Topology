@@ -13,10 +13,10 @@
 GEM5_EXECUTABLE="./build/NULL/gem5.opt"
 GEM5_CONFIG="configs/example/garnet_synth_traffic.py"
 
-RESULTS_DIR="lab4/sec1/routing_comparison"
-TEMP_DIR="lab4/sec1/routing_comparison/tmp"
+RESULTS_DIR="lab4/routing_comparison"
+TEMP_DIR="lab4/routing_comparison/tmp"
 OUTPUT_CSV="${RESULTS_DIR}/results_routing.csv"
-SIM_CYCLES=10000
+SIM_CYCLES=50000
 
 # TSV latency controls (Z-link timing):
 # Effective Z latency = link_latency * TSV_SLOWDOWN / TSV_SPEEDUP
@@ -35,7 +35,7 @@ JOBS="$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)"
 SYNTHETIC_PATTERNS=(uniform_random) #tornado shuffle transpose neighbor)
 
 # Injection rates to sweep (0.02 -> 0.50 step 0.02)
-INJECTION_RATES=$(seq 0.02 0.02 0.70)
+INJECTION_RATES=$(seq 0.01 0.01 0.50)
 
 # Routing algorithms to sweep
 ROUTING_ALGORITHMS=(0 3 4)

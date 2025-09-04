@@ -2,6 +2,8 @@
 
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
 import os
 import sys
 
@@ -24,14 +26,30 @@ METRICS_TO_PLOT = {
 
 # Style cycles for lines and markers
 ROUTING_STYLES = {
-    0: {"color": "blue", "marker": "o", "linestyle": "-", "label": "Routing 0 (TABLE_)"},
-    3: {"color": "green", "marker": "s", "linestyle": "--", "label": "Routing 3 (XYZ_)"},
-    4: {"color": "red", "marker": "^", "linestyle": ":", "label": "Routing 4 (WestFirst)"},
+    0: {
+        "color": "blue",
+        "marker": "o",
+        "linestyle": "-",
+        "label": "Routing 0 (TABLE_)",
+    },
+    3: {
+        "color": "green",
+        "marker": "s",
+        "linestyle": "--",
+        "label": "Routing 3 (XYZ_)",
+    },
+    4: {
+        "color": "red",
+        "marker": "^",
+        "linestyle": ":",
+        "label": "Routing 4 (WestFirst)",
+    },
 }
 
 # ==============================================================================
 # Script Logic
 # ==============================================================================
+
 
 def main():
     """Main function to load data and generate plots."""
@@ -51,28 +69,40 @@ def main():
     os.makedirs(PLOT_DIR, exist_ok=True)
     print(f"Plots will be saved to: {PLOT_DIR}")
 
+    # Style
+    sns.set_theme(style="whitegrid", palette="deep")
+
     # --- 2. Get unique dimensions for plotting ---
     topologies = df["Topology"].unique()
     traffics = df["Traffic"].unique()
 
     # --- 3. Generate a plot for each metric, topology, and traffic pattern ---
+    def safe_name(s: str) -> str:
+        return str(s).replace(" ", "_").replace("/", "_")
+
     for metric_key, y_label in METRICS_TO_PLOT.items():
         for topo in topologies:
             for traffic in traffics:
                 # Filter data for the current scenario
-                subset = df[(df["Topology"] == topo) & (df["Traffic"] == traffic)]
+                subset = df[
+                    (df["Topology"] == topo) & (df["Traffic"] == traffic)
+                ]
 
                 if subset.empty:
                     continue
 
-                print(f"Plotting [{metric_key}] for Topology='{topo}', Traffic='{traffic}'...")
+                print(
+                    f"Plotting [{metric_key}] for Topology='{topo}', Traffic='{traffic}'..."
+                )
 
                 # Create figure
                 fig, ax = plt.subplots(figsize=(12, 8))
 
                 # Plot a line for each routing algorithm
                 for routing_algo in sorted(subset["Routing"].unique()):
-                    routing_data = subset[subset["Routing"] == routing_algo].sort_values("InjectionRate")
+                    routing_data = subset[
+                        subset["Routing"] == routing_algo
+                    ].sort_values("InjectionRate")
                     style = ROUTING_STYLES.get(routing_algo, {})
                     ax.plot(
                         routing_data["InjectionRate"],
@@ -80,22 +110,108 @@ def main():
                         label=style.get("label", f"Routing {routing_algo}"),
                         color=style.get("color"),
                         marker=style.get("marker"),
-                        linestyle=style.get("linestyle")
+                        linestyle=style.get("linestyle"),
                     )
+                    # annotate peak for throughput metric
+                    if metric_key == "Throughput" and not routing_data.empty:
+                        idx = routing_data[metric_key].idxmax()
+                        x_pk = routing_data.loc[idx, "InjectionRate"]
+                        y_pk = routing_data.loc[idx, metric_key]
+                        ax.scatter(
+                            [x_pk], [y_pk], color=style.get("color"), zorder=5
+                        )
+                        ax.annotate(
+                            f"peak {y_pk:.3f}@{x_pk:.3f}",
+                            (x_pk, y_pk),
+                            textcoords="offset points",
+                            xytext=(6, 6),
+                            fontsize=8,
+                        )
 
                 # --- 4. Finalize and save the plot ---
-                ax.set_title(f"{metric_key} vs. Injection Rate\nTopology: {topo}, Traffic: {traffic}")
+                ax.set_title(
+                    f"{metric_key} vs. Injection Rate\nTopology: {topo}, Traffic: {traffic}"
+                )
                 ax.set_xlabel("Injection Rate (pkts/node/cycle)")
                 ax.set_ylabel(y_label)
                 ax.grid(True, which="both", linestyle="--", linewidth=0.5)
                 ax.legend()
 
                 # Save the figure
-                plot_filename = f"{PLOT_DIR}/{metric_key}_{topo}_{traffic}.png"
+                plot_filename = f"{PLOT_DIR}/{metric_key}_{safe_name(topo)}_{safe_name(traffic)}.png"
                 fig.savefig(plot_filename, dpi=300, bbox_inches="tight")
                 plt.close(fig)
 
+                # Log-scale Y variant
+                yvals = subset[metric_key].replace(0, np.nan)
+                if np.isfinite(yvals).any():
+                    ymin = float(np.nanmin(yvals))
+                    fig, ax = plt.subplots(figsize=(12, 8))
+                    for routing_algo in sorted(subset["Routing"].unique()):
+                        routing_data = subset[
+                            subset["Routing"] == routing_algo
+                        ].sort_values("InjectionRate")
+                        style = ROUTING_STYLES.get(routing_algo, {})
+                        ax.plot(
+                            routing_data["InjectionRate"],
+                            routing_data[metric_key],
+                            label=style.get(
+                                "label", f"Routing {routing_algo}"
+                            ),
+                            color=style.get("color"),
+                            marker=style.get("marker"),
+                            linestyle=style.get("linestyle"),
+                        )
+                    ax.set_title(
+                        f"{metric_key} vs. Injection Rate (log-y)\nTopology: {topo}, Traffic: {traffic}"
+                    )
+                    ax.set_xlabel("Injection Rate (pkts/node/cycle)")
+                    ax.set_ylabel(y_label)
+                    ax.grid(True, which="both", linestyle="--", linewidth=0.5)
+                    ax.legend()
+                    ax.set_yscale("log")
+                    ax.set_ylim(bottom=max(1e-6, ymin))
+                    plot_filename_log = f"{PLOT_DIR}/{metric_key}_{safe_name(topo)}_{safe_name(traffic)}_logy.png"
+                    fig.savefig(
+                        plot_filename_log, dpi=300, bbox_inches="tight"
+                    )
+                    plt.close(fig)
+
+                # Additional useful figure: Latency vs Throughput
+                if set(["Throughput", "AvgTotalLatency"]).issubset(
+                    subset.columns
+                ):
+                    fig, ax = plt.subplots(figsize=(12, 8))
+                    for routing_algo in sorted(subset["Routing"].unique()):
+                        routing_data = subset[
+                            subset["Routing"] == routing_algo
+                        ].sort_values("InjectionRate")
+                        style = ROUTING_STYLES.get(routing_algo, {})
+                        ax.plot(
+                            routing_data["Throughput"],
+                            routing_data["AvgTotalLatency"],
+                            label=style.get(
+                                "label", f"Routing {routing_algo}"
+                            ),
+                            color=style.get("color"),
+                            marker=style.get("marker"),
+                            linestyle=style.get("linestyle"),
+                        )
+                    ax.set_title(
+                        f"Latency vs Throughput\nTopology: {topo}, Traffic: {traffic}"
+                    )
+                    ax.set_xlabel("Throughput (accepted pkts/node/cycle)")
+                    ax.set_ylabel("Average Packet Latency (cycles)")
+                    ax.grid(True, which="both", linestyle="--", linewidth=0.5)
+                    ax.legend()
+                    plot_filename_lvt = f"{PLOT_DIR}/LatencyVsThroughput_{safe_name(topo)}_{safe_name(traffic)}.png"
+                    fig.savefig(
+                        plot_filename_lvt, dpi=300, bbox_inches="tight"
+                    )
+                    plt.close(fig)
+
     print("\nAll plots generated successfully.")
+
 
 if __name__ == "__main__":
     main()
