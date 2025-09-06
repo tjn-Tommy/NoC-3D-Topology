@@ -47,15 +47,31 @@ class GarnetNetwork(RubyNetwork):
     buffers_per_ctrl_vc = Param.UInt32(1, "buffers per ctrl virtual channel")
     routing_algorithm = Param.Int(
         0,
-        "0: Weight-based Table, 1: XY, 2: Custom, 3: Adaptive minimal (credit-aware), 4: CAR-3D",
+        "0: Weight-based Table, 1: XY, 2: Custom, 3: Adaptive minimal (credit-aware), 4: CAR-3D, 5: UGAL-L (local), 6: UGAL-Plus (congestion+EWMA)",
     )
     enable_fault_model = Param.Bool(False, "enable network fault model")
     fault_model = Param.FaultModel(NULL, "network fault model")
     escape_vc_enabled = Param.Bool(False, "enable escape virtual channel")
+    
+    # SPIN scheme (optional): enable SPIN-style deadlock handling and threshold
+    enable_spin_scheme = Param.Bool(False, "enable SPIN synchronized-progress scheme")
+    dd_thresh = Param.UInt32(300, "SPIN deadlock-detection threshold (cycles)")
+    max_turn_capacity = Param.UInt32(100, "SPIN: max allowed turns for probe path")
     garnet_deadlock_threshold = Param.UInt32(
         50000, "network-level deadlock threshold"
     )
 
+    # Routing algorithm knobs (for 4=CAR3D, 5=UGAL-L, 6=UGAL-Plus)
+    # Shared EWMA smoothing (used by CAR3D/UGAL+)
+    ewma_lambda = Param.Float(0.2, "EWMA smoothing factor for outport credits (0..1)")
+
+    # CAR3D scoring weights
+    car3d_alpha = Param.Float(1.0, "CAR3D weight on instantaneous credits")
+    car3d_beta  = Param.Float(0.5, "CAR3D weight on EWMA credits")
+
+    # UGAL-L (local) knobs
+    ugal_penalty = Param.Int(2, "UGAL-L non-minimal detour penalty (in hop-equivalent)")
+    ugal_tol     = Param.Float(1.0, "UGAL-L tolerance multiplier (<1 to encourage non-min)")
 
 class GarnetNetworkInterface(ClockedObject):
     type = "GarnetNetworkInterface"

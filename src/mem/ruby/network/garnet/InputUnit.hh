@@ -107,6 +107,9 @@ class InputUnit : public Consumer
         return virtualChannels[invc].get_enqueue_time();
     }
 
+    // SPIN: expose VC state to router
+    inline VC_state_type get_vc_state(int vc) { return virtualChannels[vc].get_state(); }
+
     void increment_credit(int in_vc, bool free_signal, Tick curTime);
 
     inline flit*
@@ -132,6 +135,15 @@ class InputUnit : public Consumer
     {
         return virtualChannels[invc].isReady(curTime);
     }
+
+    // --- SPIN (optional) ---
+    // Per-VC stall tracking and freeze/thaw helpers used by SPIN-style
+    // deadlock handling. These are no-ops unless enabled via network param.
+    void increment_stall(int vc);
+    void reset_stall(int vc);
+    void freeze_vc(int vc);
+    void thaw_vc(int vc);
+    bool is_vc_frozen(int vc) const;
 
     flitBuffer* getCreditQueue() { return &creditQueue; }
 
@@ -159,6 +171,19 @@ class InputUnit : public Consumer
 
     void resetStats();
 
+    // SPIN stats accessors
+    unsigned get_num_probes_dropped() const { return m_num_probes_dropped; }
+    unsigned get_num_move_dropped() const { return m_num_move_dropped; }
+    unsigned get_num_check_probe_dropped() const { return m_num_check_probe_dropped; }
+    void reset_spin_stats();
+
+    // SPIN helpers used by router
+    bool create_fork_vector(flit *t_flit);
+    void clear_fork_vector();
+    int find_move_vc(flit *t_flit);
+    bool verify_dependence_at_source(flit *t_flit);
+    void un_freeze_vc(int vc) { thaw_vc(vc); }
+
   private:
     Router *m_router;
     int m_id;
@@ -174,6 +199,17 @@ class InputUnit : public Consumer
     // Statistical variables
     std::vector<double> m_num_buffer_writes;
     std::vector<double> m_num_buffer_reads;
+
+    // SPIN (optional): per-VC stall counters and frozen flags
+    std::vector<uint32_t> m_stall_count;
+    std::vector<bool> m_vc_frozen;
+
+    // SPIN: fork vector per outport
+    std::vector<bool> m_fork_vector;
+    // SPIN stats
+    unsigned m_num_probes_dropped = 0;
+    unsigned m_num_move_dropped = 0;
+    unsigned m_num_check_probe_dropped = 0;
 };
 
 } // namespace garnet

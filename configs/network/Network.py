@@ -119,7 +119,8 @@ def define_options(parser):
             1: XY (for Mesh. see garnet/RoutingUnit.cc)
             2: Custom (see garnet/RoutingUnit.cc)
             3: Adaptive minimal, credit-aware (3D-ready)
-            4: CAR-3D (EWMA + lookahead-inspired scoring)""",
+            4: CAR-3D (EWMA + lookahead-inspired scoring)
+            5: UGAL-L (local, single-segment at source)""",
     )
     parser.add_argument(
         "--network-fault-model",
@@ -157,6 +158,38 @@ def define_options(parser):
         help="Wait time for escape virtual channel fallback",
     )
 
+    # SPIN scheme (optional)
+    parser.add_argument(
+        "--enable-spin-scheme",
+        action="store_true",
+        default=False,
+        help="Enable SPIN synchronized-progress scheme (freeze+escape fallback)",
+    )
+    parser.add_argument(
+        "--dd-thresh",
+        type=int,
+        default=300,
+        help="SPIN deadlock-detection threshold in cycles",
+    )
+    parser.add_argument(
+        "--max-turn-capacity",
+        type=int,
+        default=100,
+        help="SPIN: maximum number of turns for a probe path",
+    )
+
+    # Routing knobs (CAR3D/UGAL/UGAL+) exposed to CLI
+    parser.add_argument("--ewma-lambda", type=float, default=0.2,
+                        help="EWMA smoothing for outport credits (0..1)")
+    parser.add_argument("--car3d-alpha", type=float, default=1.0,
+                        help="CAR3D weight on instantaneous credits")
+    parser.add_argument("--car3d-beta",  type=float, default=0.5,
+                        help="CAR3D weight on EWMA credits")
+
+    parser.add_argument("--ugal-penalty", type=int, default=2,
+                        help="UGAL-L non-min detour penalty (hop-equivalent)")
+    parser.add_argument("--ugal-tol", type=float, default=1.0,
+                        help="UGAL-L tolerance multiplier (<1 encourages non-min)")
 
 def create_network(options, ruby):
 
@@ -209,6 +242,19 @@ def init_network(options, network, InterfaceClass):
         network.garnet_deadlock_threshold = options.garnet_deadlock_threshold
         network.escape_vc_enabled = options.escape_vc
         # network.escape_fallback_wait = options.escape_fallback_wait
+        # SPIN
+        network.enable_spin_scheme = options.enable_spin_scheme
+        network.dd_thresh = options.dd_thresh
+        network.max_turn_capacity = options.max_turn_capacity
+
+        # Routing knobs
+        network.ewma_lambda = options.ewma_lambda
+        network.car3d_alpha = options.car3d_alpha
+        network.car3d_beta  = options.car3d_beta
+
+        network.ugal_penalty = options.ugal_penalty
+        network.ugal_tol     = options.ugal_tol
+
 
         # Create Bridges and connect them to the corresponding links
         for intLink in network.int_links:

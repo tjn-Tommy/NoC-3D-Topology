@@ -63,6 +63,7 @@ class VirtualChannel
     inline Tick get_enqueue_time()          { return m_enqueue_time; }
     inline void set_enqueue_time(Tick time) { m_enqueue_time = time; }
     inline VC_state_type get_state()        { return m_vc_state.first; }
+    bool containsHeadAndTail() const;
 
     inline bool
     isReady(Tick curTime)

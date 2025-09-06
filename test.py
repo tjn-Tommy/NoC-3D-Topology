@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """
 Built-in-config plotting for gem5 Garnet topology comparison.
-
-Input CSV must have (header row):
-Topology,Traffic,InjectionRate,Throughput,PacketsInjected,PacketsReceived,AvgTotalLatency,AvgHops
+Input CSV must have (header row): Topology,Traffic,InjectionRate,Throughput,PacketsInjected,PacketsReceived,AvgTotalLatency,AvgHops
 
 Outputs go to OUTDIR:
 - throughput_vs_injection_<TRAFFIC>.png
@@ -13,6 +11,8 @@ Outputs go to OUTDIR:
 - peak_throughput_heatmap.png
 - knee_injection_rate_heatmap.png
 - results_summary.csv
+- inj_rate_vs_throughput_<TOPOLOGY>.png (NEW)
+- throughput_vs_latency_<TOPOLOGY>.png (NEW)
 """
 
 import os
@@ -38,11 +38,12 @@ FILTER_TOPOLOGY = None  # e.g., ["Mesh_XY", "Torus_XY"]
 
 # Show interactive windows? (usually False for batch)
 SHOW = False
-# ============================================================================
 
+# ============================================================================
 
 def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = [c.strip() for c in df.columns]
+    
     # Backward-compat column aliases
     rename_map = {}
     if "SentPackets" in df.columns and "PacketsInjected" not in df.columns:
@@ -54,13 +55,14 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         and "AvgTotalLatency" not in df.columns
     ):
         rename_map["AvgPacketLatency"] = "AvgTotalLatency"
+    
     if rename_map:
         df = df.rename(columns=rename_map)
-
+    
     if "Topology" not in df.columns:
-        # If older CSVs didn’t include topology, assume Mesh_XY to keep plotting usable
+        # If older CSVs didn't include topology, assume Mesh_XY to keep plotting usable
         df["Topology"] = "Mesh_XY"
-
+    
     required = [
         "Topology",
         "Traffic",
@@ -76,6 +78,7 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(
             f"CSV missing columns: {missing}\nFound: {list(df.columns)}"
         )
+    
     return df
 
 
@@ -89,6 +92,7 @@ def to_numeric(df: pd.DataFrame) -> pd.DataFrame:
         "AvgHops",
     ]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+    
     df = df.dropna(subset=["InjectionRate", "Throughput", "AvgTotalLatency"])
     return df
 
@@ -111,19 +115,25 @@ def summarize(df: pd.DataFrame, knee_factor: float) -> pd.DataFrame:
     rows = []
     for (traffic, topo), g in df.groupby(["Traffic", "Topology"], sort=True):
         g = g.sort_values("InjectionRate")
+        
         # Peak throughput
         idx_peak = g["Throughput"].idxmax()
         peak_tp = g.loc[idx_peak, "Throughput"]
         inj_at_peak = g.loc[idx_peak, "InjectionRate"]
+        
         # Low-load latency at min inj
         min_inj = g["InjectionRate"].min()
         low_latency = g.loc[g["InjectionRate"].idxmin(), "AvgTotalLatency"]
+        
         # Knee
         knee_thresh = low_latency * knee_factor
         knee_rows = g[g["AvgTotalLatency"] >= knee_thresh]
         knee_inj = (
-            knee_rows["InjectionRate"].min() if not knee_rows.empty else np.nan
+            knee_rows["InjectionRate"].min()
+            if not knee_rows.empty
+            else np.nan
         )
+        
         rows.append(
             {
                 "Traffic": traffic,
@@ -138,11 +148,90 @@ def summarize(df: pd.DataFrame, knee_factor: float) -> pd.DataFrame:
                 ),
             }
         )
+    
     return pd.DataFrame(rows).sort_values(["Traffic", "Topology"])
 
 
-def plot_throughput_vs_injection(df, traffic, outdir, dpi):
+# NEW FUNCTION: Injection Rate vs Throughput (by Topology)
+def plot_inj_rate_vs_throughput_by_topology(df, topology, outdir, dpi):
+    """
+    Plot Injection Rate vs Throughput for a specific topology.
+    Different traffic patterns (flow patterns) are shown in the same plot.
+    """
     plt.figure(figsize=(8, 6))
+    
+    sns.lineplot(
+        data=df,
+        x="InjectionRate",
+        y="Throughput",
+        hue="Traffic",
+        style="Traffic",
+        markers=True,
+        dashes=False,
+    )
+    
+    plt.title(
+        f"Injection Rate vs Throughput — {topology}",
+        fontsize=16,
+        fontweight="bold",
+    )
+    plt.xlabel("Injection Rate (pkts/node/cycle)")
+    plt.ylabel("Throughput (accepted pkts/node/cycle)")
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.legend(title="Traffic Pattern")
+    
+    fn = os.path.join(
+        outdir, f"inj_rate_vs_throughput_{safe_name(topology)}.png"
+    )
+    plt.savefig(fn, dpi=dpi, bbox_inches="tight")
+    if SHOW:
+        plt.show()
+    plt.close()
+    return fn
+
+
+# NEW FUNCTION: Throughput vs Latency (by Topology)
+def plot_throughput_vs_latency_by_topology(df, topology, outdir, dpi):
+    """
+    Plot Throughput vs Latency for a specific topology.
+    Different traffic patterns (flow patterns) are shown in the same plot.
+    """
+    plt.figure(figsize=(8, 6))
+    
+    sns.lineplot(
+        data=df,
+        x="Throughput",
+        y="AvgTotalLatency",
+        hue="Traffic",
+        style="Traffic",
+        markers=True,
+        dashes=False,
+    )
+    
+    plt.title(
+        f"Throughput vs Latency — {topology}",
+        fontsize=16,
+        fontweight="bold"
+    )
+    plt.xlabel("Throughput (accepted pkts/node/cycle)")
+    plt.ylabel("Average Packet Latency (cycles)")
+    plt.ylim(bottom=0)
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.legend(title="Traffic Pattern")
+    
+    fn = os.path.join(
+        outdir, f"throughput_vs_latency_{safe_name(topology)}.png"
+    )
+    plt.savefig(fn, dpi=dpi, bbox_inches="tight")
+    if SHOW:
+        plt.show()
+    plt.close()
+    return fn
+
+
+# EXISTING FUNCTIONS (keeping all the original functionality)
+def plot_throughput_vs_injection(df, traffic, outdir, dpi):
+    plt.figure(figsize=(12, 7))
     sns.lineplot(
         data=df,
         x="InjectionRate",
@@ -161,6 +250,7 @@ def plot_throughput_vs_injection(df, traffic, outdir, dpi):
     plt.ylabel("Throughput (accepted pkts/node/cycle)")
     plt.grid(True, linestyle="--", alpha=0.4)
     plt.legend(title="Topology")
+    
     fn = os.path.join(
         outdir, f"throughput_vs_injection_{safe_name(traffic)}.png"
     )
@@ -172,7 +262,7 @@ def plot_throughput_vs_injection(df, traffic, outdir, dpi):
 
 
 def plot_latency_vs_injection(df, traffic, outdir, dpi):
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(12, 7))
     sns.lineplot(
         data=df,
         x="InjectionRate",
@@ -192,6 +282,7 @@ def plot_latency_vs_injection(df, traffic, outdir, dpi):
     plt.ylim(bottom=0)
     plt.grid(True, linestyle="--", alpha=0.4)
     plt.legend(title="Topology")
+    
     # Annotate knee (first inj where latency >= 2x low-load)
     try:
         for topo, g in df.groupby("Topology"):
@@ -219,6 +310,7 @@ def plot_latency_vs_injection(df, traffic, outdir, dpi):
                 )
     except Exception as e:
         warnings.warn(f"Knee annotation skipped: {e}")
+    
     fn = os.path.join(outdir, f"latency_vs_injection_{safe_name(traffic)}.png")
     plt.savefig(fn, dpi=dpi, bbox_inches="tight")
     if SHOW:
@@ -228,7 +320,7 @@ def plot_latency_vs_injection(df, traffic, outdir, dpi):
 
 
 def plot_latency_vs_throughput(df, traffic, outdir, dpi):
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(12, 7))
     sns.lineplot(
         data=df,
         x="Throughput",
@@ -239,13 +331,16 @@ def plot_latency_vs_throughput(df, traffic, outdir, dpi):
         dashes=False,
     )
     plt.title(
-        f"Latency vs Throughput — {traffic}", fontsize=16, fontweight="bold"
+        f"Latency vs Throughput — {traffic}",
+        fontsize=16,
+        fontweight="bold"
     )
     plt.xlabel("Throughput (accepted pkts/node/cycle)")
     plt.ylabel("Average Packet Latency (cycles)")
     plt.ylim(bottom=0)
     plt.grid(True, linestyle="--", alpha=0.4)
     plt.legend(title="Topology")
+    
     fn = os.path.join(
         outdir, f"latency_vs_throughput_{safe_name(traffic)}.png"
     )
@@ -257,7 +352,7 @@ def plot_latency_vs_throughput(df, traffic, outdir, dpi):
 
 
 def plot_throughput_vs_injection_logy(df, traffic, outdir, dpi):
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(12, 7))
     sns.lineplot(
         data=df,
         x="InjectionRate",
@@ -279,6 +374,7 @@ def plot_throughput_vs_injection_logy(df, traffic, outdir, dpi):
     plt.ylim(bottom=ymin)
     plt.grid(True, which="both", linestyle="--", alpha=0.4)
     plt.legend(title="Topology")
+    
     fn = os.path.join(
         outdir, f"throughput_vs_injection_{safe_name(traffic)}_logy.png"
     )
@@ -290,7 +386,7 @@ def plot_throughput_vs_injection_logy(df, traffic, outdir, dpi):
 
 
 def plot_latency_vs_injection_logy(df, traffic, outdir, dpi):
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(12, 7))
     sns.lineplot(
         data=df,
         x="InjectionRate",
@@ -314,6 +410,7 @@ def plot_latency_vs_injection_logy(df, traffic, outdir, dpi):
     plt.ylim(bottom=ymin)
     plt.grid(True, which="both", linestyle="--", alpha=0.4)
     plt.legend(title="Topology")
+    
     fn = os.path.join(
         outdir, f"latency_vs_injection_{safe_name(traffic)}_logy.png"
     )
@@ -325,7 +422,7 @@ def plot_latency_vs_injection_logy(df, traffic, outdir, dpi):
 
 
 def plot_latency_vs_throughput_logy(df, traffic, outdir, dpi):
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(12, 7))
     sns.lineplot(
         data=df,
         x="Throughput",
@@ -349,6 +446,7 @@ def plot_latency_vs_throughput_logy(df, traffic, outdir, dpi):
     plt.ylim(bottom=ymin)
     plt.grid(True, which="both", linestyle="--", alpha=0.4)
     plt.legend(title="Topology")
+    
     fn = os.path.join(
         outdir, f"latency_vs_throughput_{safe_name(traffic)}_logy.png"
     )
@@ -375,8 +473,10 @@ def facet_throughput_vs_injection(df, outdir, dpi):
     g.add_legend(title="Topology")
     g.set_axis_labels("Injection Rate", "Throughput")
     g.set_titles(col_template="{col_name}")
+    
     for ax in g.axes.flat:
         ax.grid(True, linestyle="--", alpha=0.4)
+    
     fn = os.path.join(outdir, "facet_throughput_vs_injection.png")
     plt.savefig(fn, dpi=dpi, bbox_inches="tight")
     if SHOW:
@@ -409,6 +509,7 @@ def plot_peak_tp_heatmap(summary_df, outdir, dpi):
     )
     plt.ylabel("Topology")
     plt.xlabel("Traffic")
+    
     fn = os.path.join(outdir, "peak_throughput_heatmap.png")
     plt.savefig(fn, dpi=dpi, bbox_inches="tight")
     if SHOW:
@@ -441,6 +542,7 @@ def plot_knee_heatmap(summary_df, outdir, dpi):
     )
     plt.ylabel("Topology")
     plt.xlabel("Traffic")
+    
     fn = os.path.join(outdir, "knee_injection_rate_heatmap.png")
     plt.savefig(fn, dpi=dpi, bbox_inches="tight")
     if SHOW:
@@ -451,38 +553,38 @@ def plot_knee_heatmap(summary_df, outdir, dpi):
 
 def main():
     os.makedirs(OUTDIR, exist_ok=True)
-
+    
     # Style
     sns.set_theme(style="whitegrid", palette="deep")
-
+    
     # Load CSV (assumes header row exists)
     try:
         df = pd.read_csv(CSV_FILE)
     except FileNotFoundError:
         print(f"Error: File not found: {CSV_FILE}")
         sys.exit(1)
-
+    
     df = ensure_columns(df)
     df = to_numeric(df)
     df = maybe_filter(df)
-
+    
     if df.empty:
         print("No data after filtering. Check CSV/filters.")
         sys.exit(0)
-
+    
     # Sort for nice lines
     df = df.sort_values(["Traffic", "Topology", "InjectionRate"]).reset_index(
         drop=True
     )
-
+    
     # Summary metrics & save
     summary_df = summarize(df, knee_factor=KNEE_FACTOR)
     summary_path = os.path.join(OUTDIR, "results_summary.csv")
     summary_df.to_csv(summary_path, index=False)
-
+    
     saved = []
-
-    # Per-traffic comparison (topologies as hue)
+    
+    # Per-traffic comparison (topologies as hue) - EXISTING PLOTS
     for traffic, g in df.groupby("Traffic", sort=True):
         saved.append(plot_throughput_vs_injection(g, traffic, OUTDIR, DPI))
         saved.append(
@@ -492,17 +594,22 @@ def main():
         saved.append(plot_latency_vs_injection_logy(g, traffic, OUTDIR, DPI))
         saved.append(plot_latency_vs_throughput(g, traffic, OUTDIR, DPI))
         saved.append(plot_latency_vs_throughput_logy(g, traffic, OUTDIR, DPI))
-
+    
+    # NEW: Per-topology comparison (traffic patterns as hue)
+    for topology, g in df.groupby("Topology", sort=True):
+        saved.append(plot_inj_rate_vs_throughput_by_topology(g, topology, OUTDIR, DPI))
+        saved.append(plot_throughput_vs_latency_by_topology(g, topology, OUTDIR, DPI))
+    
     # Aggregated visuals
     saved.append(facet_throughput_vs_injection(df, OUTDIR, DPI))
     saved.append(plot_peak_tp_heatmap(summary_df, OUTDIR, DPI))
     saved.append(plot_knee_heatmap(summary_df, OUTDIR, DPI))
-
+    
     print("\n=== Saved Figures ===")
     for s in saved:
         print(s)
     print(f"\nSummary CSV: {summary_path}")
-
+    
     # Quick highlights: best topology per traffic
     print("\n=== Peak Throughput by Traffic/Topology ===")
     for traffic, g in summary_df.groupby("Traffic"):

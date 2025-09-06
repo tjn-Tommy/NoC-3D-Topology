@@ -36,6 +36,7 @@
 #include "mem/ruby/network/garnet/InputUnit.hh"
 #include "mem/ruby/network/garnet/OutputUnit.hh"
 #include "mem/ruby/network/garnet/Router.hh"
+#include "mem/ruby/network/garnet/flitBuffer.hh"
 
 namespace gem5
 {
@@ -77,6 +78,13 @@ SwitchAllocator::init()
     for (int i = 0; i < m_num_outports; i++) {
         m_round_robin_inport[i] = 0;
     }
+
+    // SPIN queues and reservations
+    probeQueue = m_router->getProbeQueuePtr();
+    moveQueue = m_router->getMoveQueuePtr();
+    kill_moveQueue = m_router->getKillMoveQueuePtr();
+    check_probeQueue = m_router->getCheckProbeQueuePtr();
+    outport_reservations.assign(m_num_outports, false);
 }
 
 /*
@@ -91,6 +99,15 @@ SwitchAllocator::init()
 void
 SwitchAllocator::wakeup()
 {
+    // SPIN send before normal arbitration
+    if (m_router->spin_scheme_enabled()) {
+        if (m_router->get_start_move()) effectuate_move();
+        send_check_probe();
+        send_move();
+        send_kill_move();
+        send_probes();
+    }
+
     if (is_escape_vc_enabled()) {
         arbitrate_inports_escape(); // First stage of allocation
     } else {
@@ -100,6 +117,8 @@ SwitchAllocator::wakeup()
 
     clear_request_vector();
     check_for_wakeup();
+
+    if (m_router->spin_scheme_enabled()) clear_reservations();
 }
 
 /*
@@ -126,6 +145,17 @@ SwitchAllocator::arbitrate_inports()
             if (input_unit->need_stage(invc, SA_, curTick())) {
                 // This flit is in SA stage
 
+                // If SPIN is enabled and this VC is frozen, do not place a
+                // normal request in SA-I. Optionally, try to route via escape
+                // in the other SA variant when escape VC is enabled.
+                if (m_router->get_net_ptr()->isSpinSchemeEnabled() &&
+                    input_unit->is_vc_frozen(invc)) {
+                    // No request; keep the VC frozen. Try again next cycle.
+                    invc++;
+                    if (invc >= m_num_vcs) invc = 0;
+                    continue;
+                }
+
                 int outport = input_unit->get_outport(invc);
                 int outvc = input_unit->get_outvc(invc);
 
@@ -138,8 +168,13 @@ SwitchAllocator::arbitrate_inports()
                     m_input_arbiter_activity++;
                     m_port_requests[inport] = outport;
                     m_vc_winners[inport] = invc;
+                    // Reset stall counter on progress
+                    if (m_router->get_net_ptr()->isSpinSchemeEnabled())
+                        input_unit->reset_stall(invc);
 
                     break; // got one vc winner for this port
+                } else if (m_router->get_net_ptr()->isSpinSchemeEnabled()) {
+                    input_unit->increment_stall(invc);
                 }
             }
 
@@ -209,6 +244,13 @@ SwitchAllocator::arbitrate_inports_escape()
                 int outport = input_unit->get_outport(invc);
                 int outvc   = input_unit->get_outvc(invc);
 
+                // SPIN-aware: skip normal requests for frozen VCs
+                if (m_router->get_net_ptr()->isSpinSchemeEnabled() &&
+                    input_unit->is_vc_frozen(invc)) {
+                    invc++;
+                    continue;
+                }
+
                 bool make_request =
                     send_allowed(inport, invc, outport, outvc, is_escape_vc_enabled());
 
@@ -261,7 +303,11 @@ SwitchAllocator::arbitrate_inports_escape()
                     m_port_requests[inport] = outport;
                     m_vc_winners[inport]    = invc;   // non-escape winner
                     picked = true;
+                    if (m_router->get_net_ptr()->isSpinSchemeEnabled())
+                        input_unit->reset_stall(invc);
                     break;
+                } else if (m_router->get_net_ptr()->isSpinSchemeEnabled()) {
+                    input_unit->increment_stall(invc);
                 }
             }
 
@@ -381,6 +427,9 @@ SwitchAllocator::arbitrate_outports()
     // Again do round robin arbitration on these requests
     // Independent arbiter at each output port
     for (int outport = 0; outport < m_num_outports; outport++) {
+        // SPIN: skip this outport if reserved by control/move this cycle
+        if (m_router->spin_scheme_enabled() && outport_reservations[outport])
+            continue;
         int start_inport = m_round_robin_inport[outport];
 
         // First pass: give priority to escape requests targeting this outport
@@ -431,6 +480,10 @@ SwitchAllocator::arbitrate_outports()
                     continue;
                 }
                 input_unit->grant_outvc(invc, outvc);
+                // SPIN: allow frozen VC to make progress via escape
+                if (m_router->get_net_ptr()->isSpinSchemeEnabled()) {
+                    input_unit->thaw_vc(invc);
+                }
             } else {
                 outvc = vc_allocate(outport, inport, invc); // normal path
             }
@@ -506,6 +559,123 @@ SwitchAllocator::arbitrate_outports()
         if (m_round_robin_invc[inport] >= m_num_vcs)
             m_round_robin_invc[inport] = 0;
     }
+}
+
+// ---------- SPIN sending primitives ----------
+void SwitchAllocator::send_probes()
+{
+    while (this->probeQueue && this->probeQueue->isReady(curTick())) {
+        flit *p = this->probeQueue->getTopFlit();
+        int outport = p->get_outport();
+        int inport = p->getInport();
+        if (outport < 0) { delete p; continue; }
+        if (outport_reservations[outport]) { delete p; continue; }
+        outport_reservations[outport] = true;
+        p->advance_stage(ST_, curTick());
+        m_router->grant_switch(inport, p);
+    }
+}
+
+void SwitchAllocator::send_move()
+{
+    while (this->moveQueue && this->moveQueue->isReady(curTick())) {
+        flit *mv = this->moveQueue->getTopFlit();
+        int outport = mv->get_outport();
+        int inport = mv->getInport();
+        if (outport < 0) { delete mv; continue; }
+        if (outport_reservations[outport]) { delete mv; continue; }
+        outport_reservations[outport] = true;
+        mv->advance_stage(ST_, curTick());
+        m_router->grant_switch(inport, mv);
+    }
+}
+
+void SwitchAllocator::send_kill_move()
+{
+    while (this->kill_moveQueue && this->kill_moveQueue->isReady(curTick())) {
+        flit *km = this->kill_moveQueue->getTopFlit();
+        int outport = km->get_outport();
+        int inport = km->getInport();
+        if (km->getMustSend()) {
+            if (!outport_reservations[outport]) {
+                outport_reservations[outport] = true;
+                km->advance_stage(ST_, curTick());
+                m_router->grant_switch(inport, km);
+            } else {
+                delete km;
+            }
+        } else {
+            if (outport_reservations[outport]) {
+                delete km;
+            } else {
+                outport_reservations[outport] = true;
+                km->advance_stage(ST_, curTick());
+                m_router->grant_switch(inport, km);
+            }
+        }
+    }
+}
+
+void SwitchAllocator::send_check_probe()
+{
+    while (this->check_probeQueue && this->check_probeQueue->isReady(curTick())) {
+        flit *cp = this->check_probeQueue->getTopFlit();
+        int outport = cp->get_outport();
+        int inport = cp->getInport();
+        if (outport < 0) { delete cp; continue; }
+        if (outport_reservations[outport]) { delete cp; continue; }
+        outport_reservations[outport] = true;
+        cp->advance_stage(ST_, curTick());
+        m_router->grant_switch(inport, cp);
+    }
+}
+
+void SwitchAllocator::effectuate_move()
+{
+    // Move flits for entries in move registry, bound by credits
+    const auto &registry = m_router->get_move_registry();
+    if (registry.empty()) return;
+    // For each entry, move the next flit if credits allow
+    for (auto *mi : registry) {
+        int outport = mi->outport;
+        if (outport_reservations[outport]) continue;
+        auto *input_unit = m_router->getInputUnit(mi->inport);
+        if (!input_unit->isReady(mi->vc, curTick())) continue;
+        // Assign/ensure outvc
+        int outvc = input_unit->get_outvc(mi->vc);
+        if (outvc == -1) {
+            outvc = m_router->getOutputUnit(outport)->select_free_vc(get_vnet(mi->vc));
+            if (outvc == -1) continue; // no VC
+            input_unit->grant_outvc(mi->vc, outvc);
+        }
+        auto *outU = m_router->getOutputUnit(outport);
+        if (!outU->has_credit(outvc)) continue;
+        // Remove flit and send
+        flit *t_flit = input_unit->getTopFlit(mi->vc);
+        t_flit->set_outport(outport);
+        t_flit->set_vc(outvc);
+        outU->decrement_credit(outvc);
+        t_flit->advance_stage(ST_, curTick());
+        outport_reservations[outport] = true;
+        m_router->grant_switch(mi->inport, t_flit);
+        if (t_flit->get_type() == TAIL_ || t_flit->get_type() == HEAD_TAIL_) {
+            // Free input VC and send free credit upstream
+            input_unit->set_vc_idle(mi->vc, curTick());
+            input_unit->increment_credit(mi->vc, true, curTick());
+            mi->tail_moved = true;
+        } else {
+            input_unit->increment_credit(mi->vc, false, curTick());
+        }
+    }
+    // Complete move if all moved tails
+    bool all_done = true;
+    for (auto *mi : registry) if (!mi->tail_moved) { all_done = false; break; }
+    if (all_done) m_router->move_complete();
+}
+
+void SwitchAllocator::clear_reservations()
+{
+    std::fill(outport_reservations.begin(), outport_reservations.end(), false);
 }
 
 /*

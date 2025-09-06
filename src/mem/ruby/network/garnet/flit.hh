@@ -33,6 +33,7 @@
 
 #include <cassert>
 #include <iostream>
+#include <queue>
 
 #include "base/types.hh"
 #include "mem/ruby/network/garnet/CommonTypes.hh"
@@ -53,6 +54,10 @@ class flit
     flit() {}
     flit(int packet_id, int id, int vc, int vnet, RouteInfo route, int size,
          MsgPtr msg_ptr, int MsgSize, uint32_t bWidth, Tick curTime);
+    // SPIN control flits
+    flit(int src_id, int src_inp_port, int src_vc, int vnet,
+         flit_type type, Tick curTime, const std::queue<int> &path);
+    flit(int src_id, const std::queue<int> &path, Tick curTime, int inport);
 
     virtual ~flit(){};
 
@@ -115,6 +120,32 @@ class flit
 
     uint32_t m_width;
     int msgSize;
+
+    // --- SPIN (optional) helpers ---
+    // When SPIN is enabled, control flits use these helpers to coordinate
+    // progress along frozen paths. They have no effect otherwise.
+    void setMustSend(bool v=true) { m_must_send = v; }
+    bool getMustSend() const { return m_must_send; }
+    void setPartOfMove(bool v=true) { m_part_of_move = v; }
+    bool isPartOfMove() const { return m_part_of_move; }
+    void setSourceIds(int src_id, int src_inport, int src_vc) {
+        m_source_id = src_id; m_source_inp_port = src_inport; m_source_vc = src_vc;
+    }
+    int getSourceId() const { return m_source_id; }
+    int getSourceInport() const { return m_source_inp_port; }
+    int getSourceVc() const { return m_source_vc; }
+    void setInport(int port) { m_inport = port; }
+    int getInport() const { return m_inport; }
+    // Path stack utilities for control flits
+    void setPath(const std::queue<int> &p) { m_path = p; }
+    std::queue<int> get_path() const { return m_path; }
+    int getPathTop() { int v = m_path.front(); m_path.pop(); return v; }
+    int peekPathTop() const { return m_path.empty() ? -1 : m_path.front(); }
+    unsigned getNumTurns() const { return (unsigned)m_path.size(); }
+    // Delay accounting in ticks
+    void addDelay(Tick t) { m_delay += t; }
+    void subDelay(Tick t) { if (t <= m_delay) m_delay -= t; else m_delay = 0; }
+    Tick getDelay() const { return m_delay; }
   protected:
     int m_packet_id;
     int m_id;
@@ -129,6 +160,16 @@ class flit
     int m_outport;
     Tick src_delay;
     std::pair<flit_stage, Tick> m_stage;
+
+    // SPIN-related (optional) metadata
+    bool m_must_send = false;
+    bool m_part_of_move = false;
+    int m_source_id = -1;
+    int m_source_inp_port = -1;
+    int m_source_vc = -1;
+    int m_inport = -1;
+    std::queue<int> m_path;
+    Tick m_delay = 0;
 };
 
 inline std::ostream&

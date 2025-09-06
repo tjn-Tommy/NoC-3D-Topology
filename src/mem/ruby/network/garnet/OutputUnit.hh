@@ -65,6 +65,7 @@ class OutputUnit : public Consumer
     flitBuffer* getOutQueue();
     void print(std::ostream& out) const {};
     void decrement_credit(int out_vc);
+    void decrement_credit_by(int count, int out_vc);
     void increment_credit(int out_vc);
     bool has_credit(int out_vc);
     bool has_free_vc(int vnet);
@@ -81,6 +82,7 @@ class OutputUnit : public Consumer
     {
         return outVcState[vc].get_credit_count();
     }
+    int get_max_credit_count(int vc) const { return outVcState[vc].get_max_credit_count(); }
 
     inline int
     get_outlink_id()

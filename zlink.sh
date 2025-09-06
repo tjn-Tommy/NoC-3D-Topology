@@ -15,7 +15,7 @@ RESULTS_DIR="lab4/sparse3d_tsv"
 TEMP_DIR="${RESULTS_DIR}/tmp"
 OUTPUT_CSV="${RESULTS_DIR}/results.csv"
 PLOT_DIR="${RESULTS_DIR}/plots"
-SIM_CYCLES=50000
+SIM_CYCLES=10000
 
 # Node counts (match earlier sweeps)
 NUM_CPUS=64
@@ -28,7 +28,7 @@ JOBS=32
 SYNTHETIC_PATTERNS=(uniform_random)
 
 # Injection rates to sweep (0.02 -> 0.70 step 0.02)
-INJECTION_RATES=$(seq 0.01 0.01 0.50)
+INJECTION_RATES=$(seq 0.02 0.02 0.50)
 
 # Keep XY link latency fixed at 1
 XY_LINK_LATENCY=1
@@ -38,8 +38,10 @@ Z_LATENCIES=(1 2 4)
 
 # Two target topologies (name|extra_args)
 TOPOLOGY_BASES=(
+  #"Mesh3D_XYZ|--mesh-rows=4"
   "Sparse3D_Pillars|--mesh-rows=4"
-  "Sparse3D_Pillars_torus|--mesh-rows=4"
+  "Cluster3D_Hub|--mesh-rows=4"
+  "Hier3D_Chiplet|--mesh-rows=4"
 )
 
 ###############################################################################
@@ -108,7 +110,7 @@ run_one() {
     --network=garnet --num-cpus="${NUM_CPUS}" --num-dirs="${NUM_DIRS}" \
     --topology="${topo}" \
     --inj-vnet=0 --synthetic="${traffic}" \
-    --sim-cycles="${SIM_CYCLES}" --injectionrate="${rate}" --escape-vc --routing-algorithm=4 \
+    --sim-cycles="${SIM_CYCLES}" --injectionrate="${rate}" --escape-vc --routing-algorithm=5 \
     --link-latency="${XY_LINK_LATENCY}" --tsv-slowdown="${tsv_slowdown}" --tsv-speedup="${tsv_speedup}" \
     ${topo_args} \
     > "${OUTDIR}/gem5.log" 2>&1

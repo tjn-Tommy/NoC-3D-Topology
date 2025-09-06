@@ -86,6 +86,17 @@ class GarnetNetwork : public Network
 
     bool isEscapeVcEnabled() const { return m_escape_vc_enabled; }
 
+    // SPIN (optional): global enable and threshold
+    bool isSpinSchemeEnabled() const { return m_spin_scheme_enabled; }
+    uint32_t getSpinDdThreshold() const { return m_spin_dd_thresh; }
+    uint32_t getSpinMaxTurnCapacity() const { return m_spin_max_turn_cap; }
+
+    // Routing knob getters
+    double getEwmaLambda() const { return m_ewma_lambda; }
+    double getCar3DAlpha() const { return m_car3d_alpha; }
+    double getCar3DBeta()  const { return m_car3d_beta; }
+    int    getUgalPenalty() const { return m_ugal_penalty; }
+    double getUgalTol()     const { return m_ugal_tol; }
     // Internal configuration
     bool isVNetOrdered(int vnet) const { return m_ordered[vnet]; }
     VNET_type
@@ -95,6 +106,7 @@ class GarnetNetwork : public Network
     }
     int getNumRouters();
     int get_router_id(int ni, int vnet);
+
 
 
     // Methods used by Topology to setup the network
@@ -162,6 +174,13 @@ class GarnetNetwork : public Network
     // Escape-tree helpers
     int tinOf(int routerId) const { return m_tin_of_router[routerId]; }
     int toutOf(int routerId) const { return m_tout_of_router[routerId]; }
+    // Topology distance helpers (unweighted hop count on physical links)
+    int minHopsBetween(int u, int v) const {
+        if (u < 0 || v < 0) return INFINITE_;
+        if (u >= (int)m_min_hops.size()) return INFINITE_;
+        if (v >= (int)m_min_hops[u].size()) return INFINITE_;
+        return m_min_hops[u][v];
+    }
 
   protected:
     // Configuration
@@ -177,6 +196,19 @@ class GarnetNetwork : public Network
     std::vector<int> m_tinIndex;
     std::vector<int> m_tin_of_router;
     std::vector<int> m_tout_of_router;
+    std::vector<std::vector<int>> m_min_hops; // [src][dst] unweighted hops
+
+    // SPIN
+    bool m_spin_scheme_enabled{false};
+    uint32_t m_spin_dd_thresh{0};
+    uint32_t m_spin_max_turn_cap{100};
+
+    // Routing knobs
+    double m_ewma_lambda{0.2};
+    double m_car3d_alpha{1.0};
+    double m_car3d_beta{0.5};
+    int    m_ugal_penalty{2};
+    double m_ugal_tol{1.0};
 
     // Statistical variables
     statistics::Vector m_packets_received;
@@ -212,6 +244,8 @@ class GarnetNetwork : public Network
 
     std::vector<std::vector<statistics::Scalar *>> m_data_traffic_distribution;
     std::vector<std::vector<statistics::Scalar *>> m_ctrl_traffic_distribution;
+
+    
 
   private:
     GarnetNetwork(const GarnetNetwork& obj);

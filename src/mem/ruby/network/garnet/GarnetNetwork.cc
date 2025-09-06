@@ -78,6 +78,18 @@ GarnetNetwork::GarnetNetwork(const Params &p)
 
     m_escape_vc_enabled = p.escape_vc_enabled;
 
+    // SPIN (optional)
+    m_spin_scheme_enabled = p.enable_spin_scheme;
+    m_spin_dd_thresh = p.dd_thresh;
+    m_spin_max_turn_cap = p.max_turn_capacity;
+
+    // Routing knobs
+    m_ewma_lambda = p.ewma_lambda;
+    m_car3d_alpha = p.car3d_alpha;
+    m_car3d_beta  = p.car3d_beta;
+    m_ugal_penalty = p.ugal_penalty;
+    m_ugal_tol     = p.ugal_tol;
+
     m_vnet_type.resize(m_virtual_networks);
 
     for (int i = 0 ; i < m_virtual_networks ; i++) {
@@ -185,7 +197,7 @@ void GarnetNetwork::buildEscapeTree()
     std::vector<std::vector<int>> children(N);
     std::vector<char> seen(N, 0);
     std::queue<int> q;
-    const int ROOT = 31;
+    const int ROOT = 0;
 
     seen[ROOT] = 1;
     q.push(ROOT);
@@ -223,6 +235,23 @@ void GarnetNetwork::buildEscapeTree()
     dfs(ROOT);
     m_tin_of_router = tin;
     m_tout_of_router = tout;
+
+    // 3b) All-pairs unweighted hop distances on physical links (excluding Local)
+    m_min_hops.assign(N, std::vector<int>(N, INFINITE_));
+    for (int s = 0; s < N; ++s) {
+        std::queue<int> qq;
+        m_min_hops[s][s] = 0;
+        qq.push(s);
+        while (!qq.empty()) {
+            int x = qq.front(); qq.pop();
+            for (auto [op, y] : adj[x]) {
+                if (m_min_hops[s][y] == INFINITE_) {
+                    m_min_hops[s][y] = m_min_hops[s][x] + 1;
+                    qq.push(y);
+                }
+            }
+        }
+    }
 
     // 4) Install into each RoutingUnit
     for (int u = 0; u < N; ++u) {
@@ -644,6 +673,8 @@ GarnetNetwork::regStats()
             statistics::oneline)
         ;
 
+    
+
     // Traffic distribution
     for (int source = 0; source < m_routers.size(); ++source) {
         m_data_traffic_distribution.push_back(
@@ -696,6 +727,8 @@ GarnetNetwork::collateStats()
     for (int i = 0; i < m_routers.size(); i++) {
         m_routers[i]->collateStats();
     }
+
+    
 }
 
 void

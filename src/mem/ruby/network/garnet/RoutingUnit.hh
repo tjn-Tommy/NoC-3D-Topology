@@ -92,6 +92,11 @@ class RoutingUnit
                                int inport,
                                PortDirection inport_dirn);
 
+    // UGAL-L (local): choose between minimal and one non-minimal first hop at source
+    int outportComputeUGAL(RouteInfo route,
+                           int inport,
+                           PortDirection inport_dirn);
+
     // --- add near the top of class RoutingUnit public: ---
     int outportEscapeVC(RouteInfo route, int inport, PortDirection inport_dirn);
     int outportIndex(PortDirection dir) const {

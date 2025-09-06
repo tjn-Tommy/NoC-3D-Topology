@@ -52,6 +52,7 @@ class OutVcState
     inline bool has_credit()       { return (m_credit_count > 0); }
     void increment_credit();
     void decrement_credit();
+    int get_max_credit_count() const { return m_max_credit_count; }
 
     inline bool
     isInState(VC_state_type state, Tick request_time)

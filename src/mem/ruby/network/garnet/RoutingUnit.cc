@@ -200,6 +200,8 @@ RoutingUnit::outportCompute(RouteInfo route, int inport,
             outportComputeCar3D(route, inport, inport_dirn); break;
         case ADAPTIVE_: outport =
             outportComputeAdaptive(route, inport, inport_dirn); break;
+        case UGAL_: outport =
+            outportComputeUGAL(route, inport, inport_dirn); break;
         default: outport =
             lookupRoutingTable(route.vnet, route.net_dest); break;
     }
@@ -416,6 +418,140 @@ RoutingUnit::outportComputeAdaptive(RouteInfo route,
     return choice;
 }
 
+// UGAL-L (local), single-segment: at source router (Local inport), compare
+// minimal first hop vs a non-minimal first hop using local congestion and a
+// fixed distance penalty for the non-minimal option. Downstream routers use
+// minimal routing again (i.e., we only misroute the first hop of the packet).
+int
+RoutingUnit::outportComputeUGAL(RouteInfo route,
+                                int inport,
+                                PortDirection inport_dirn)
+{
+    // If destination NI is attached here, use LOCAL outport from table
+    if (route.dest_router == m_router->get_id()) {
+        return lookupRoutingTable(route.vnet, route.net_dest);
+    }
+
+    // Only the source router (Local inport) attempts UGAL; others use minimal
+    if (inport_dirn != "Local") {
+        return lookupRoutingTable(route.vnet, route.net_dest);
+    }
+
+    const int vnet = route.vnet;
+    if (vnet < 0 || vnet >= (int)m_routing_table.size()) {
+        return lookupRoutingTable(route.vnet, route.net_dest);
+    }
+
+    // 1) Build minimal candidate set via routing table min-weight filtering
+    int min_weight = INFINITE_;
+    std::vector<int> min_cands;
+    min_cands.reserve(m_routing_table[vnet].size());
+    for (int link = 0; link < (int)m_routing_table[vnet].size(); link++) {
+        if (route.net_dest.intersectionIsNotEmpty(m_routing_table[vnet][link])) {
+            if (m_weight_table[link] <= min_weight)
+                min_weight = m_weight_table[link];
+        }
+    }
+    for (int link = 0; link < (int)m_routing_table[vnet].size(); link++) {
+        if (route.net_dest.intersectionIsNotEmpty(m_routing_table[vnet][link]) &&
+            m_weight_table[link] == min_weight) {
+            min_cands.push_back(link);
+        }
+    }
+    if (min_cands.empty()) {
+        fatal("Fatal Error:: No Route exists from this Router.");
+        return -1;
+    }
+
+    auto creditSum = [&](int outport) -> int {
+        auto *outU = m_router->getOutputUnit(outport);
+        if (!outU) return -1;
+        const int vcs_per_vnet = m_router->get_vc_per_vnet();
+        const bool escape_en   = m_router->is_escape_vc_enabled();
+        const int base = vnet * vcs_per_vnet;
+        int sum = 0;
+        for (int off = 0; off < vcs_per_vnet; ++off) {
+            if (escape_en && off == 0) continue; // exclude escape VC
+            sum += outU->get_credit_count(base + off);
+        }
+        return sum;
+    };
+
+    auto occupancySum = [&](int outport) -> int {
+        auto *outU = m_router->getOutputUnit(outport);
+        if (!outU) return 1<<20; // very large
+        const int vcs_per_vnet = m_router->get_vc_per_vnet();
+        const bool escape_en   = m_router->is_escape_vc_enabled();
+        const int base = vnet * vcs_per_vnet;
+        int sum = 0;
+        for (int off = 0; off < vcs_per_vnet; ++off) {
+            if (escape_en && off == 0) continue;
+            const int vc_idx = base + off;
+            sum += (outU->get_max_credit_count(vc_idx) - outU->get_credit_count(vc_idx));
+        }
+        return sum;
+    };
+
+    // Choose best minimal outport by maximum free credits (min occupancy)
+    int best_min = min_cands.front();
+    int best_min_occ = occupancySum(best_min);
+    for (int c : min_cands) {
+        int occ = occupancySum(c);
+        if (occ < best_min_occ) { best_min_occ = occ; best_min = c; }
+    }
+
+    // 2) Build non-minimal candidate set = all physical outports except Local
+    //    and those in minimal candidate set. Pick the one with best credits.
+    std::vector<int> nonmin_cands;
+    const int nOut = m_router->get_num_outports();
+    nonmin_cands.reserve(nOut);
+    for (int op = 0; op < nOut; ++op) {
+        auto dir = m_router->getOutportDirection(op);
+        if (dir == "Local") continue;
+        if (std::find(min_cands.begin(), min_cands.end(), op) != min_cands.end())
+            continue;
+        nonmin_cands.push_back(op);
+    }
+
+    // If no non-minimal option exists (e.g., degree-1), choose minimal
+    if (nonmin_cands.empty()) {
+        return best_min;
+    }
+
+    int best_nonmin = nonmin_cands.front();
+    int best_nonmin_occ = occupancySum(best_nonmin);
+    for (int c : nonmin_cands) {
+        int occ = occupancySum(c);
+        if (occ < best_nonmin_occ) { best_nonmin_occ = occ; best_nonmin = c; }
+    }
+
+    // 3) UGAL-L decision: local estimate comparing minimal vs non-minimal.
+    //    cost = occupancy + distance_penalty. Use a fixed penalty for non-min.
+    //    This approximates extra hops for detour without topology assumptions.
+    const int distance_penalty_min    = 0; // measured from the next hop only
+    const int distance_penalty_nonmin = m_router->get_net_ptr()->getUgalPenalty();
+    const double tol = m_router->get_net_ptr()->getUgalTol();
+    const double cost_min    = (double)best_min_occ    + distance_penalty_min;
+    const double cost_nonmin = (double)best_nonmin_occ + distance_penalty_nonmin;
+
+    int choice = ((cost_nonmin * tol) < cost_min) ? best_nonmin : best_min;
+
+    // Tie-breaker: prefer minimal when costs equal
+    if (cost_nonmin == cost_min) choice = best_min;
+
+    // Update per-router stats to let us verify UGAL actually engages
+    if (choice == best_nonmin) m_router->incUGALNonMin();
+    else m_router->incUGALMin();
+
+    DPRINTF(RubyNetwork,
+            "UGAL @R%d inport %d dir %s: best_min=%d occ=%d, best_nonmin=%d occ=%d, choice=%d\n",
+            m_router->get_id(), inport, inport_dirn.c_str(), best_min, best_min_occ,
+            best_nonmin, best_nonmin_occ, choice);
+
+    return choice;
+}
+
+
 void RoutingUnit::ensureEwmaSized()
 {
     const int num_outports = m_outports_idx2dirn.size();
@@ -435,7 +571,9 @@ void RoutingUnit::updateEwma(int outport, int vnet, int observedCredits)
     ensureEwmaSized();
     if (outport < 0 || outport >= (int)m_outport_ewma.size()) return;
     if (vnet < 0 || vnet >= (int)m_outport_ewma[outport].size()) return;
-    constexpr double lambda = 0.2; // smoothing factor
+    double lambda = m_router->get_net_ptr()->getEwmaLambda();
+    if (lambda < 0.0) lambda = 0.0;
+    if (lambda > 1.0) lambda = 1.0;
     double &ew = m_outport_ewma[outport][vnet];
     ew = (1.0 - lambda) * ew + lambda * (double)observedCredits;
 }
@@ -492,8 +630,8 @@ RoutingUnit::outportComputeCar3D(RouteInfo route,
         return sum;
     };
 
-    constexpr double alpha = 1.0;
-    constexpr double beta  = 0.5;
+    const double alpha = m_router->get_net_ptr()->getCar3DAlpha();
+    const double beta  = m_router->get_net_ptr()->getCar3DBeta();
 
     // Compute best score
     double bestScore = -1e18;

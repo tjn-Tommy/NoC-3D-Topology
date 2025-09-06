@@ -81,6 +81,12 @@ VirtualChannel::functionalRead(Packet *pkt, WriteMask &mask)
     return inputBuffer.functionalRead(pkt, mask);
 }
 
+bool
+VirtualChannel::containsHeadAndTail() const
+{
+    return inputBuffer.containsHeadAndTail();
+}
+
 uint32_t
 VirtualChannel::functionalWrite(Packet *pkt)
 {

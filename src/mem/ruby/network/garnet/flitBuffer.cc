@@ -98,6 +98,21 @@ flitBuffer::functionalRead(Packet *pkt, WriteMask &mask)
     return read;
 }
 
+bool
+flitBuffer::containsHeadAndTail() const
+{
+    bool has_head = false;
+    bool has_tail = false;
+    for (auto *f : m_buffer) {
+        if (f->get_type() == HEAD_ || f->get_type() == HEAD_TAIL_)
+            has_head = true;
+        if (f->get_type() == TAIL_ || f->get_type() == HEAD_TAIL_)
+            has_tail = true;
+        if (has_head && has_tail) return true;
+    }
+    return has_head && has_tail;
+}
+
 uint32_t
 flitBuffer::functionalWrite(Packet *pkt)
 {

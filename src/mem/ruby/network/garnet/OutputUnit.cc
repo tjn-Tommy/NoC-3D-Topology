@@ -72,6 +72,14 @@ OutputUnit::decrement_credit(int out_vc)
 }
 
 void
+OutputUnit::decrement_credit_by(int count, int out_vc)
+{
+    for (int i = 0; i < count; ++i) {
+        decrement_credit(out_vc);
+    }
+}
+
+void
 OutputUnit::increment_credit(int out_vc)
 {
     DPRINTF(RubyNetwork, "Router %d OutputUnit %s incrementing credit:%d for "

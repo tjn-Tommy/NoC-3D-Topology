@@ -31,7 +31,7 @@ NUM_DIRS=64
 JOBS="$(command -v nproc >/dev/null 2>&1 && nproc || echo 4)"
 
 # Synthetic patterns to sweep
-SYNTHETIC_PATTERNS=(uniform_random) # tornado shuffle transpose)
+SYNTHETIC_PATTERNS=(uniform_random transpose neighbor) #tornado shuffle 
 
 # Injection rates to sweep (0.02 -> 0.50 step 0.02)
 INJECTION_RATES=$(seq 0.02 0.02 0.50)
@@ -40,17 +40,17 @@ INJECTION_RATES=$(seq 0.02 0.02 0.50)
 # Edit/add as needed (you can include your custom ones here).
 TOPOLOGY_MATRIX=(
   # 2D baseline (no TSV settings needed)
-  # "Mesh_XY|--mesh-rows=8"
+  #"Mesh_XY|--mesh-rows=8"
 
   # 3D topologies with per-topology TSV settings (edit here to tailor)
-  # "Mesh3D_XYZ|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=1"
+  "Mesh3D_XYZ|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=4"
   # "Torus3D|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=1"
-  # "Sparse3D_Pillars|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=4"
-  # "Sparse3D_Pillars_torus|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=4"
+  #"Sparse3D_Pillars|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=4"
+  #"Sparse3D_Pillars_torus|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=4"
   "Cluster3D_Hub|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=4"
-  "Hier3D_ClusterHub|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=4"
+  #"Hier3D_ClusterHub|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=4"
   # "SW3D_Express|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=4"
-  "Hier3D_Chiplet|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=4"
+  #"Hier3D_Chiplet|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=4"
   # "PillarTorusExpress3D|--mesh-rows=4 --tsv-slowdown=4 --tsv-speedup=4"
 )
 
@@ -122,12 +122,13 @@ run_one() {
   eval "tsv_fast_topo=\${TSV_SPEEDUP_${topo_key}:-${TSV_SPEEDUP}}"
   "${GEM5_EXECUTABLE}" -d "${OUTDIR}" "${GEM5_CONFIG}" \
     --network=garnet --num-cpus="${NUM_CPUS}" --num-dirs="${NUM_DIRS}" \
-    --topology="${topo}" \
+    --topology="${topo}" --vcs-per-vnet=4 \
     --inj-vnet=0 --synthetic="${traffic}" \
     --sim-cycles="${SIM_CYCLES}" --injectionrate="${rate}" --escape-vc --routing-algorithm=4 \
     --tsv-slowdown="${tsv_slow_topo}" --tsv-speedup="${tsv_fast_topo}" \
     ${topo_args} \
     > "${OUTDIR}/gem5.log" 2>&1
+    #--escape-vc
   #--link-latency=2 --router-latency=2
   # Parse stats if present
   local STATS="${OUTDIR}/stats.txt"

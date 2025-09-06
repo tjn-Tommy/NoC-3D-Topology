@@ -73,6 +73,66 @@ flit::flit(int packet_id, int id, int  vc, int vnet, RouteInfo route, int size,
         m_type = BODY_;
 }
 
+// SPIN control flit constructors (optional paths)
+// PROBE/MOVE/CHECK_PROBE carry source info; KILL_MOVE minimal
+flit::flit(int src_id, int src_inp_port, int src_vc, int vnet,
+           flit_type type, Tick curTime, const std::queue<int> &path)
+{
+    m_size = 1;
+    m_msg_ptr = nullptr;
+    m_enqueue_time = curTime;
+    m_dequeue_time = curTime;
+    m_time = curTime;
+    m_packet_id = -1;
+    m_id = 0;
+    m_vnet = vnet;
+    m_vc = src_vc;
+    m_route = RouteInfo();
+    m_stage.first = I_;
+    m_stage.second = curTime;
+    m_width = 0;
+    msgSize = 0;
+    m_type = type;
+    m_source_id = src_id;
+    m_source_inp_port = src_inp_port;
+    m_source_vc = src_vc;
+    m_inport = src_inp_port;
+    m_path = path;
+    // For PROBE, set next outport directly from the path's front
+    if (type == PROBE_) {
+        m_outport = m_path.empty() ? -1 : m_path.front();
+    } else if (type == MOVE_ || type == CHECK_PROBE_) {
+        // Consume first hop from the path as this cycle's outport
+        m_outport = m_path.empty() ? -1 : getPathTop();
+    }
+}
+
+flit::flit(int src_id, const std::queue<int> &path, Tick curTime, int inport)
+{
+    m_size = 1;
+    m_msg_ptr = nullptr;
+    m_enqueue_time = curTime;
+    m_dequeue_time = curTime;
+    m_time = curTime;
+    m_packet_id = -1;
+    m_id = 0;
+    m_vnet = 0;
+    m_vc = -1;
+    m_route = RouteInfo();
+    m_stage.first = I_;
+    m_stage.second = curTime;
+    m_width = 0;
+    msgSize = 0;
+    m_type = KILL_MOVE_;
+    m_source_id = src_id;
+    m_source_inp_port = inport;
+    m_inport = inport;
+    m_source_vc = -1;
+    m_path = path;
+    // For KILL_MOVE_, consume the path head as the outport
+    m_outport = m_path.empty() ? -1 : getPathTop();
+}
+
 flit *
 flit::serialize(int ser_id, int parts, uint32_t bWidth)
 {
@@ -116,6 +176,7 @@ flit::print(std::ostream& out) const
     out << "Size=" << m_size << " ";
     out << "Vnet=" << m_vnet << " ";
     out << "VC=" << m_vc << " ";
+    out << "SrcRouter=" << m_source_id << " ";
     out << "Src NI=" << m_route.src_ni << " ";
     out << "Src Router=" << m_route.src_router << " ";
     out << "Dest NI=" << m_route.dest_ni << " ";

@@ -59,6 +59,7 @@ class flitBuffer
     bool isFull();
     void setMaxSize(int maximum);
     int getSize() const { return m_buffer.size(); }
+    bool containsHeadAndTail() const;
 
     flit *
     getTopFlit()

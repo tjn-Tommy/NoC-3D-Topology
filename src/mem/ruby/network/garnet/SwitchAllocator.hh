@@ -50,6 +50,7 @@ namespace garnet
 class Router;
 class InputUnit;
 class OutputUnit;
+class flitBuffer;
 
 class SwitchAllocator : public Consumer
 {
@@ -81,6 +82,14 @@ class SwitchAllocator : public Consumer
 
     void resetStats();
 
+    // SPIN helpers
+    void send_probes();
+    void send_move();
+    void send_kill_move();
+    void send_check_probe();
+    void effectuate_move();
+    void clear_reservations();
+
   private:
     int m_num_inports, m_num_outports;
     int m_num_vcs, m_vc_per_vnet;
@@ -93,6 +102,13 @@ class SwitchAllocator : public Consumer
     std::vector<int> m_round_robin_inport;
     std::vector<int> m_port_requests;
     std::vector<int> m_vc_winners;
+
+    // SPIN state (allocator-local)
+    flitBuffer *probeQueue{nullptr};
+    flitBuffer *moveQueue{nullptr};
+    flitBuffer *kill_moveQueue{nullptr};
+    flitBuffer *check_probeQueue{nullptr};
+    std::vector<bool> outport_reservations;
 };
 
 } // namespace garnet

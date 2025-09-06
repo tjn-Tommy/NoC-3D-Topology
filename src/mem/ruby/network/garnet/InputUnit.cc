@@ -61,6 +61,11 @@ InputUnit::InputUnit(int id, PortDirection direction, Router *router)
     for (int i=0; i < m_num_vcs; i++) {
         virtualChannels.emplace_back();
     }
+
+    // SPIN (optional): init per-VC stall and frozen state
+    m_stall_count.assign(m_num_vcs, 0);
+    m_vc_frozen.assign(m_num_vcs, false);
+    m_fork_vector.assign(m_router->get_num_outports(), false);
 }
 
 /*
@@ -87,6 +92,139 @@ InputUnit::wakeup()
         int vc = t_flit->get_vc();
         t_flit->increment_hops(); // for stats
 
+        // SPIN control flits handling (subset)
+        if (m_router->spin_scheme_enabled()) {
+            flit_type ft = t_flit->get_type();
+            if (ft == PROBE_ || ft == MOVE_ || ft == CHECK_PROBE_ || ft == KILL_MOVE_) {
+                // Attach current router id as inport for forwarding semantics
+                t_flit->setInport(m_router->get_id());
+                if (ft == PROBE_) {
+                    if (t_flit->getSourceId() == m_router->get_id()) {
+                        if (verify_dependence_at_source(t_flit)) {
+                            m_router->set_loop_delay(Cycles(1));
+                            m_router->latch_path(t_flit);
+                            int move_id = m_router->send_move_msg(m_id, t_flit->getSourceVc());
+                            m_router->latch_source_id_buffer(m_router->get_id(), move_id);
+                            m_router->create_move_info_entry(m_id, t_flit->getSourceVc(), m_router->peek_path_top());
+                            m_router->set_counter(t_flit->getSourceInport(), t_flit->getSourceVc(), s_move, 0);
+                        } else {
+                            m_num_probes_dropped++;
+                        }
+                        delete t_flit;
+                        return;
+                    } else {
+                        // Drop if path turns exceed capacity
+                        if ((unsigned)t_flit->getNumTurns() > m_router->get_net_ptr()->getSpinMaxTurnCapacity()) {
+                            m_num_probes_dropped++;
+                            delete t_flit;
+                            return;
+                        }
+                        if (create_fork_vector(t_flit)) {
+                            m_router->fork_probes(t_flit, m_fork_vector);
+                        } else {
+                            m_num_probes_dropped++;
+                        }
+                        clear_fork_vector();
+                        delete t_flit;
+                        return;
+                    }
+                } else if (ft == MOVE_) {
+                    if (t_flit->getSourceId() == m_router->get_id()) {
+                        if (verify_dependence_at_source(t_flit)) {
+                            m_router->set_move_bit();
+                            m_router->set_counter(m_id, t_flit->getSourceVc(), s_forward_progress, 0);
+                        } else {
+                            m_router->send_kill_move(m_id);
+                            m_router->invalidate_path_buffer();
+                            m_router->invalidate_source_id_buffer();
+                            m_router->increment_counter_ptr();
+                            m_router->clear_move_registry();
+                            m_num_move_dropped++;
+                        }
+                        delete t_flit;
+                        return;
+                    } else {
+                        Counter_state cs = m_router->get_counter_state();
+                        if (!(cs == s_deadlock_detection || cs == s_off || cs == s_frozen)) {
+                            m_num_move_dropped++;
+                            delete t_flit; return;
+                        }
+                        if (cs == s_frozen && !m_router->partial_check_source_id_buffer(t_flit->getSourceId())) {
+                            m_num_move_dropped++;
+                            delete t_flit; return;
+                        }
+                        if (m_router->check_outport_entry_in_move_registry(t_flit->peekPathTop())) {
+                            m_num_move_dropped++;
+                            delete t_flit; return;
+                        }
+                        int mvc = find_move_vc(t_flit);
+                        if (mvc != -1) {
+                            m_router->set_move_bit();
+                            m_router->latch_source_id_buffer(t_flit->getSourceId(), t_flit->get_id());
+                            m_router->create_move_info_entry(m_id, mvc, t_flit->peekPathTop());
+                            m_router->set_counter(m_id, mvc, s_frozen, (unsigned)(1));
+                            m_router->forward_move(t_flit);
+                        } else {
+                            m_num_move_dropped++;
+                            delete t_flit;
+                        }
+                        return;
+                    }
+                } else if (ft == CHECK_PROBE_) {
+                    if (t_flit->getSourceId() == m_router->get_id()) {
+                        if (verify_dependence_at_source(t_flit)) {
+                            m_router->set_move_bit();
+                            m_router->set_counter(m_id, t_flit->getSourceVc(), s_forward_progress, 0);
+                        } else {
+                            m_router->send_kill_move(m_id);
+                            m_router->invalidate_path_buffer();
+                            m_router->invalidate_source_id_buffer();
+                            m_router->increment_counter_ptr();
+                            m_router->clear_move_registry();
+                            m_num_check_probe_dropped++;
+                        }
+                        delete t_flit;
+                        return;
+                    } else {
+                        assert(m_router->get_counter_state() == s_frozen);
+                        assert(m_router->partial_check_source_id_buffer(t_flit->getSourceId()));
+                        int mvc = find_move_vc(t_flit);
+                        if (mvc != -1) {
+                            m_router->set_move_bit();
+                            m_router->update_move_info_entry(m_id, mvc, t_flit->peekPathTop());
+                            m_router->set_counter(m_id, mvc, s_frozen, (unsigned)(1));
+                            m_router->forward_check_probe(t_flit);
+                        } else {
+                            m_num_check_probe_dropped++;
+                            delete t_flit;
+                        }
+                        return;
+                    }
+                } else if (ft == KILL_MOVE_) {
+                    if (t_flit->getSourceId() == m_router->get_id()) {
+                        delete t_flit; return;
+                    } else {
+                        if (m_router->partial_check_source_id_buffer(t_flit->getSourceId())) {
+                            t_flit->setMustSend(true);
+                            m_router->set_kill_move_processed_this_cycle();
+                            if (m_router->get_num_move_registry_entries() == 1) {
+                                m_router->reset_move_bit();
+                                m_router->increment_counter_ptr();
+                                m_router->invalidate_source_id_buffer();
+                                m_router->clear_move_registry();
+                            } else {
+                                m_router->invalidate_move_registry_entry(m_id, t_flit->peekPathTop());
+                            }
+                        } else {
+                            t_flit->setMustSend(false);
+                        }
+                        m_router->forward_kill_move(t_flit);
+                        return;
+                    }
+                }
+            }
+        }
+
         if ((t_flit->get_type() == HEAD_) ||
             (t_flit->get_type() == HEAD_TAIL_)) {
 
@@ -101,6 +239,14 @@ InputUnit::wakeup()
             // All flits in this packet will use this output port
             // The output port field in the flit is updated after it wins SA
             grant_outport(vc, outport);
+
+            // SPIN: initialize deadlock detection counter on first HEAD
+            if (m_router->spin_scheme_enabled() &&
+                m_router->get_counter_state() == s_off &&
+                m_direction != "Local" &&
+                m_router->getOutportDirection(outport) != "Local") {
+                m_router->set_counter(m_id, vc, s_deadlock_detection, 0);
+            }
 
         } else {
             assert(virtualChannels[vc].get_state() == ACTIVE_);
@@ -137,6 +283,60 @@ InputUnit::wakeup()
             m_router->schedule_wakeup(Cycles(1));
         }
     }
+}
+
+// --- SPIN (optional) helpers ---
+void
+InputUnit::increment_stall(int vc)
+{
+    if (!m_router->get_net_ptr()->isSpinSchemeEnabled()) return;
+    // Only enable freezing when an escape path is available to guarantee
+    // forward progress in our simplified SPIN handling.
+    if (!m_router->get_net_ptr()->isEscapeVcEnabled()) return;
+    if (vc < 0 || vc >= (int)m_stall_count.size()) return;
+    if (m_vc_frozen[vc]) return; // already frozen
+    m_stall_count[vc]++;
+    const uint32_t thresh = m_router->get_net_ptr()->getSpinDdThreshold();
+    if (thresh > 0 && m_stall_count[vc] >= thresh) {
+        // Freeze this VC; SwitchAllocator will attempt an escape if enabled
+        m_vc_frozen[vc] = true;
+        DPRINTF(RubyNetwork, "Router %d InputUnit %s freezing VC %d after %u stalls\n",
+                m_router->get_id(), m_router->getPortDirectionName(get_direction()), vc, m_stall_count[vc]);
+    }
+}
+
+void
+InputUnit::reset_stall(int vc)
+{
+    if (vc < 0 || vc >= (int)m_stall_count.size()) return;
+    m_stall_count[vc] = 0;
+}
+
+void
+InputUnit::freeze_vc(int vc)
+{
+    if (!m_router->get_net_ptr()->isSpinSchemeEnabled()) return;
+    if (vc < 0 || vc >= (int)m_vc_frozen.size()) return;
+    m_vc_frozen[vc] = true;
+}
+
+void
+InputUnit::thaw_vc(int vc)
+{
+    if (vc < 0 || vc >= (int)m_vc_frozen.size()) return;
+    if (m_vc_frozen[vc]) {
+        DPRINTF(RubyNetwork, "Router %d InputUnit %s thaw VC %d\n",
+                m_router->get_id(), m_router->getPortDirectionName(get_direction()), vc);
+    }
+    m_vc_frozen[vc] = false;
+    reset_stall(vc);
+}
+
+bool
+InputUnit::is_vc_frozen(int vc) const
+{
+    if (vc < 0 || vc >= (int)m_vc_frozen.size()) return false;
+    return m_vc_frozen[vc];
 }
 
 // Send a credit back to upstream router for this VC.
@@ -181,6 +381,64 @@ InputUnit::resetStats()
         m_num_buffer_reads[j] = 0;
         m_num_buffer_writes[j] = 0;
     }
+}
+
+// --- SPIN helpers (subset) ---
+bool InputUnit::verify_dependence_at_source(flit *t_flit)
+{
+    // True if the VC’s currently latched outport matches the path’s expected next outport.
+    int vc = t_flit->getSourceVc();
+    if (vc < 0) return false;
+    int expected = -1;
+    // For PROBE, compare against path top; for MOVE/CHECK_PROBE, compare against router’s path buffer later
+    expected = t_flit->peekPathTop();
+    return (virtualChannels[vc].get_outport() == expected);
+}
+
+bool InputUnit::create_fork_vector(flit *t_flit)
+{
+    // For this inport’s vnet, mark all outports where a VC is ACTIVE and not Local.
+    int vnet = t_flit->get_vnet();
+    std::fill(m_fork_vector.begin(), m_fork_vector.end(), false);
+    int base = vnet * m_vc_per_vnet;
+    int end = base + m_vc_per_vnet;
+    bool any = false;
+    for (int i = base; i < end; ++i) {
+        if (virtualChannels[i].get_state() != ACTIVE_) return false;
+        int outp = virtualChannels[i].get_outport();
+        if (m_router->getOutportDirection(outp) == "Local") return false;
+        m_fork_vector[outp] = true;
+        any = true;
+    }
+    return any;
+}
+
+void InputUnit::clear_fork_vector()
+{
+    std::fill(m_fork_vector.begin(), m_fork_vector.end(), false);
+}
+
+int InputUnit::find_move_vc(flit *t_flit)
+{
+    // Choose a VC (in this vnet) whose outport matches the path top and contains head+tail
+    int vnet = t_flit->get_vnet();
+    int base = vnet * m_vc_per_vnet;
+    int end = base + m_vc_per_vnet;
+    int outp = t_flit->peekPathTop();
+    for (int i = base; i < end; ++i) {
+        if (virtualChannels[i].get_state() != ACTIVE_) return -1;
+        if (m_router->getOutportDirection(virtualChannels[i].get_outport()) == "Local") return -1;
+        if (virtualChannels[i].get_outport() == outp && virtualChannels[i].containsHeadAndTail())
+            return i;
+    }
+    return -1;
+}
+
+void InputUnit::reset_spin_stats()
+{
+    m_num_probes_dropped = 0;
+    m_num_move_dropped = 0;
+    m_num_check_probe_dropped = 0;
 }
 
 } // namespace garnet

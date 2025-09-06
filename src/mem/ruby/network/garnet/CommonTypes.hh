@@ -44,8 +44,16 @@ namespace garnet
 
 // All common enums and typedefs go here
 
-enum flit_type {HEAD_, BODY_, TAIL_, HEAD_TAIL_,
-                CREDIT_, NUM_FLIT_TYPE_};
+// Extend flit types with control messages used by SPIN-style control flow.
+// PROBE_/MOVE_/CHECK_PROBE_/KILL_MOVE_ are no-ops in Garnet3.0 by default,
+// but enabled when the SPIN scheme is turned on via GarnetNetwork.
+enum flit_type {
+    HEAD_, BODY_, TAIL_, HEAD_TAIL_,
+    // SPIN control flits (optional):
+    PROBE_, MOVE_, CHECK_PROBE_, KILL_MOVE_,
+    CREDIT_,
+    NUM_FLIT_TYPE_
+};
 enum VC_state_type {IDLE_, VC_AB_, ACTIVE_, NUM_VC_STATE_TYPE_};
 enum VNET_type {CTRL_VNET_, DATA_VNET_, NULL_VNET_, NUM_VNET_TYPE_};
 enum flit_stage {I_, VA_, SA_, ST_, LT_, NUM_FLIT_STAGE_};
@@ -56,7 +64,18 @@ enum RoutingAlgorithm {
     CUSTOM_  = 2,
     ADAPTIVE_ = 3,  // adaptive minimal, credit-aware (3D-ready)
     CAR3D_    = 4,  // CAR-3D: EWMA + lookahead-inspired scoring
+    UGAL_     = 5,  // UGAL-L (local), single-segment non-minimal at source
     NUM_ROUTING_ALGORITHM_
+};
+
+// SPIN: per-router move registry entry
+struct move_info {
+    int inport;                    // input port at this router
+    int vc;                        // input VC index at this router
+    int outport;                   // chosen outport for the move
+    int vc_at_downstream_router;   // input VC at next router (optional)
+    bool tail_moved;               // mark when tail is moved
+    int cur_move_count;            // number of flits moved so far
 };
 
 struct RouteInfo
@@ -79,6 +98,18 @@ struct RouteInfo
 };
 
 #define INFINITE_ 10000
+
+// Lightweight counter state for SPIN-style deadlock handling. These states are
+// used only when SPIN support is enabled (see GarnetNetwork::enable_spin_scheme).
+enum Counter_state {
+    s_off,
+    s_move,
+    s_frozen,
+    s_deadlock_detection,
+    s_forward_progress,
+    s_check_probe,
+    num_cntr_states
+};
 
 } // namespace garnet
 } // namespace ruby

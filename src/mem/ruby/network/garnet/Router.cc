@@ -38,6 +38,7 @@
 #include "mem/ruby/network/garnet/InputUnit.hh"
 #include "mem/ruby/network/garnet/NetworkLink.hh"
 #include "mem/ruby/network/garnet/OutputUnit.hh"
+#include "mem/ruby/network/garnet/flitBuffer.hh"
 
 namespace gem5
 {
@@ -66,6 +67,9 @@ Router::init()
 
     switchAllocator.init();
     crossbarSwitch.init();
+
+    // SPIN: allocate state if enabled (safe to allocate always)
+    init_spin_scheme_ptr();
 }
 
 void
@@ -87,6 +91,14 @@ Router::wakeup()
     // be moved after the SA request
     for (int outport = 0; outport < m_output_unit.size(); outport++) {
         m_output_unit[outport]->wakeup();
+    }
+
+    // Reset per-cycle flag for KILL_MOVE processing
+    reset_kill_move_processed_this_cycle();
+
+    // SPIN: counter timeout check to trigger probe/move/kill progression
+    if (spin_scheme_enabled()) {
+        check_counter_timeout();
     }
 
     // Switch Allocation
@@ -230,6 +242,16 @@ Router::regStats()
         .name(name() + ".sw_output_arbiter_activity")
         .flags(statistics::nozero)
     ;
+
+    // UGAL stats
+    m_ugal_min_choices
+        .name(name() + ".ugal_min_choices")
+        .flags(statistics::nozero)
+    ;
+    m_ugal_nonmin_choices
+        .name(name() + ".ugal_nonmin_choices")
+        .flags(statistics::nozero)
+    ;
 }
 
 void
@@ -323,6 +345,366 @@ Router::functionalWrite(Packet *pkt)
     }
 
     return num_functional_writes;
+}
+
+// ---------------- SPIN implementation (subset) ----------------
+void Router::init_spin_scheme_ptr()
+{
+    m_counter = std::make_unique<counter>();
+    m_counter->count = 0;
+    m_counter->thresh = Cycles(0);
+    m_counter->state = s_off;
+    m_counter->cptr = new pointer();
+
+    m_path_buffer = std::make_unique<path_buffer>();
+    while (!m_path_buffer->path.empty()) m_path_buffer->path.pop();
+    m_path_buffer->valid = false;
+
+    m_source_id_buffer = std::make_unique<source_id_buffer>();
+    m_source_id_buffer->valid = false;
+
+    probeQueue = std::make_unique<flitBuffer>();
+    moveQueue = std::make_unique<flitBuffer>();
+    kill_moveQueue = std::make_unique<flitBuffer>();
+    check_probeQueue = std::make_unique<flitBuffer>();
+}
+
+void Router::set_counter(unsigned input_port, unsigned vc, Counter_state state, unsigned thresh)
+{
+    m_counter->cptr->input_port = input_port;
+    unsigned vnet = vc / m_vc_per_vnet;
+    m_counter->cptr->vnet = vnet;
+    m_counter->cptr->vc = vc;
+    m_counter->state = state;
+    m_counter->count = 0;
+
+    switch (state) {
+        case s_move:
+        case s_check_probe:
+        case s_forward_progress:
+            m_counter->thresh = curCycle() + get_loop_delay();
+            break;
+        case s_frozen:
+            m_counter->thresh = curCycle() + Cycles(thresh);
+            break;
+        case s_deadlock_detection:
+            m_counter->thresh = curCycle() + Cycles(m_network_ptr->getSpinDdThreshold());
+            break;
+        default:
+            m_counter->thresh = Cycles(INFINITE_);
+            break;
+    }
+    if (state != s_off) {
+        assert((m_counter->thresh - curCycle()) > 0);
+        schedule_wakeup(Cycles(m_counter->thresh - curCycle()));
+    }
+}
+
+void Router::increment_counter_ptr()
+{
+    if (!m_counter) return;
+    unsigned cur_inp = m_counter->cptr->input_port;
+    unsigned cur_vc = m_counter->cptr->vc;
+
+    // Try remaining VCs on current inport
+    for (unsigned i = cur_vc + 1; i < m_num_vcs; ++i) {
+        int t_outport = getInputUnit(cur_inp)->get_outport(i);
+        if (getInputUnit(cur_inp)->get_vc_state(i) == ACTIVE_ && getOutportDirection(t_outport) != "Local") {
+            set_counter(cur_inp, i, s_deadlock_detection, 0);
+            return;
+        }
+    }
+    // Next inports
+    for (unsigned ip = cur_inp + 1; ip < m_input_unit.size(); ++ip) {
+        if (getInportDirection(ip) == "Local") continue;
+        for (unsigned j = 0; j < m_num_vcs; ++j) {
+            int t_outport = getInputUnit(ip)->get_outport(j);
+            if (getInputUnit(ip)->get_vc_state(j) == ACTIVE_ && getOutportDirection(t_outport) != "Local") {
+                set_counter(ip, j, s_deadlock_detection, 0);
+                return;
+            }
+        }
+    }
+    // Wrap around
+    for (unsigned ip = 0; ip <= cur_inp; ++ip) {
+        if (getInportDirection(ip) == "Local") continue;
+        for (unsigned j = 0; j < m_num_vcs; ++j) {
+            int t_outport = getInputUnit(ip)->get_outport(j);
+            if (getInputUnit(ip)->get_vc_state(j) == ACTIVE_ && getOutportDirection(t_outport) != "Local") {
+                set_counter(ip, j, s_deadlock_detection, 0);
+                return;
+            }
+        }
+    }
+    // No candidate
+    set_counter(cur_inp, cur_vc, s_off, 0);
+}
+
+void Router::check_counter_timeout()
+{
+    if (!m_counter || m_counter->state == s_off) return;
+    if (curCycle() < m_counter->thresh) return;
+    switch (m_counter->state) {
+        case s_deadlock_detection:
+            send_probe();
+            increment_counter_ptr();
+            break;
+        case s_move:
+            send_kill_move(m_counter->cptr->input_port);
+            invalidate_path_buffer();
+            invalidate_source_id_buffer();
+            clear_move_registry();
+            increment_counter_ptr();
+            break;
+        case s_frozen:
+            if (get_move_bit()) set_start_move();
+            break;
+        case s_forward_progress:
+            if (get_move_bit()) set_start_move();
+            break;
+        case s_check_probe:
+            send_kill_move(m_counter->cptr->input_port);
+            invalidate_path_buffer();
+            invalidate_source_id_buffer();
+            clear_move_registry();
+            increment_counter_ptr();
+            break;
+        default:
+            break;
+    }
+}
+
+void Router::latch_path(flit *f)
+{
+    m_path_buffer->path = f->get_path();
+    m_path_buffer->valid = true;
+}
+
+int Router::peek_path_top() const
+{
+    assert(m_path_buffer->valid);
+    return m_path_buffer->path.empty() ? -1 : m_path_buffer->path.front();
+}
+
+void Router::invalidate_path_buffer()
+{
+    m_path_buffer->valid = false;
+    while (!m_path_buffer->path.empty()) m_path_buffer->path.pop();
+}
+
+void Router::latch_source_id_buffer(int source_id, int move_id)
+{
+    m_source_id_buffer->source_id = source_id;
+    m_source_id_buffer->move_id = move_id;
+    m_source_id_buffer->valid = true;
+}
+
+void Router::invalidate_source_id_buffer()
+{
+    m_source_id_buffer->source_id = -1;
+    m_source_id_buffer->move_id = -1;
+    m_source_id_buffer->valid = false;
+}
+
+bool Router::check_source_id_buffer(int source_id, int move_id) const
+{
+    if (!m_source_id_buffer->valid) return false;
+    return (m_source_id_buffer->source_id == source_id && m_source_id_buffer->move_id == move_id);
+}
+
+bool Router::partial_check_source_id_buffer(int source_id) const
+{
+    if (!m_source_id_buffer->valid) return false;
+    return (m_source_id_buffer->source_id == source_id);
+}
+
+int Router::send_move_msg(int inport, int vc)
+{
+    int vnet = vc / m_vc_per_vnet;
+    // Build move flit from path buffer (output port sequence)
+    flit *move = new flit(get_id(), inport, vc, vnet, MOVE_,
+                          clockEdge(Cycles(1)) - Cycles(1), m_path_buffer->path);
+    // two-loop delay in ticks (approximate): use router latency cycles
+    Tick ld = clockEdge(get_loop_delay()) - clockEdge(Cycles(0));
+    move->addDelay(ld);
+    move->addDelay(ld);
+    // Subtract current router latency
+    move->subDelay(clockEdge(m_latency) - clockEdge(Cycles(0)));
+    moveQueue->insert(move);
+    if (m_latency > 1)
+        schedule_wakeup(Cycles(m_latency - Cycles(1)));
+    return move->get_id();
+}
+
+void Router::send_probe()
+{
+    // Build a probe for the currently pointed VC with dependency path comprising its outport
+    int inport = m_counter->cptr->input_port;
+    int vc = m_counter->cptr->vc;
+    int vnet = vc / m_vc_per_vnet;
+    std::queue<int> p;
+    p.push(getInputUnit(inport)->get_outport(vc));
+    flit *probe = new flit(get_id(), inport, vc, vnet, PROBE_,
+                           clockEdge(Cycles(1)) - Cycles(1), p);
+    Tick ld = clockEdge(get_loop_delay()) - clockEdge(Cycles(0));
+    probe->addDelay(ld);
+    probe->addDelay(ld);
+    probe->subDelay(clockEdge(m_latency) - clockEdge(Cycles(0)));
+    probeQueue->insert(probe);
+    if (m_latency > 1)
+        schedule_wakeup(Cycles(m_latency - Cycles(1)));
+}
+
+void Router::send_check_probe(int inport, int vc)
+{
+    int vnet = vc / m_vc_per_vnet;
+    // Build check-probe with current path buffer; outport set by constructor via path head
+    flit *cp = new flit(get_id(), inport, vc, vnet, CHECK_PROBE_, clockEdge(Cycles(1)) - Cycles(1), m_path_buffer->path);
+    Tick ld = clockEdge(get_loop_delay()) - clockEdge(Cycles(0));
+    cp->addDelay(ld);
+    cp->addDelay(ld);
+    cp->subDelay(clockEdge(m_latency) - clockEdge(Cycles(0)));
+    check_probeQueue->insert(cp);
+    if (m_latency > 1)
+        schedule_wakeup(Cycles(m_latency - Cycles(1)));
+}
+
+void Router::fork_probes(flit *t_flit, const std::vector<bool> &fork_vector)
+{
+    int vnet = t_flit->get_vnet();
+    for (int op = 0; op < (int)fork_vector.size(); ++op) {
+        if (!fork_vector[op]) continue;
+        std::queue<int> path = t_flit->get_path();
+        path.push(op);
+        flit *p = new flit(t_flit->getSourceId(), t_flit->getInport(), t_flit->getSourceVc(), vnet,
+                           PROBE_, clockEdge(Cycles(1)) - Cycles(1), path);
+        p->addDelay(t_flit->getDelay());
+    p->subDelay(clockEdge(m_latency) - clockEdge(Cycles(0)));
+        probeQueue->insert(p);
+    }
+}
+
+void Router::send_kill_move(int inport)
+{
+    flit *kill = new flit(get_id(), m_path_buffer->path, clockEdge(Cycles(1)) - Cycles(1), inport);
+    kill->setMustSend(true);
+    kill_moveQueue->insert(kill);
+    if (m_latency > 1) schedule_wakeup(Cycles(m_latency - Cycles(1)));
+}
+
+void Router::forward_kill_move(flit *kill_move)
+{
+    int outport = kill_move->getPathTop();
+    kill_move->set_outport(outport);
+    kill_move->set_time(clockEdge(Cycles(1)) - Cycles(1));
+    kill_moveQueue->insert(kill_move);
+    if (m_latency > 1) schedule_wakeup(Cycles(m_latency - Cycles(1)));
+}
+
+void Router::forward_move(flit *mv)
+{
+    mv->subDelay(clockEdge(m_latency) - clockEdge(Cycles(0)));
+    int outport = mv->getPathTop();
+    mv->set_outport(outport);
+    mv->set_time(clockEdge(Cycles(1)) - Cycles(1));
+    moveQueue->insert(mv);
+    if (m_latency > 1) schedule_wakeup(Cycles(m_latency - Cycles(1)));
+}
+
+void Router::forward_check_probe(flit *cp)
+{
+    cp->subDelay(clockEdge(m_latency) - clockEdge(Cycles(0)));
+    int outport = cp->getPathTop();
+    cp->set_outport(outport);
+    cp->set_time(clockEdge(Cycles(1)) - Cycles(1));
+    check_probeQueue->insert(cp);
+    if (m_latency > 1) schedule_wakeup(Cycles(m_latency - Cycles(1)));
+}
+
+void Router::create_move_info_entry(int inport, int vc, int outport)
+{
+    auto *mi = new move_info();
+    mi->inport = inport;
+    mi->vc = vc;
+    mi->outport = outport;
+    mi->vc_at_downstream_router = -1;
+    mi->tail_moved = false;
+    mi->cur_move_count = 0;
+    move_registry.push_back(mi);
+    getInputUnit(inport)->freeze_vc(vc);
+}
+
+void Router::update_move_info_entry(int inport, int vc, int outport)
+{
+    for (auto *mi : move_registry) {
+        if (mi->outport == outport) {
+            getInputUnit(inport)->thaw_vc(mi->vc);
+            mi->vc = vc;
+            getInputUnit(inport)->freeze_vc(vc);
+            return;
+        }
+    }
+}
+
+void Router::invalidate_move_registry_entry(int inport, int outport)
+{
+    for (auto it = move_registry.begin(); it != move_registry.end(); ++it) {
+        if ((*it)->outport == outport) {
+            getInputUnit(inport)->thaw_vc((*it)->vc);
+            delete *it;
+            move_registry.erase(it);
+            return;
+        }
+    }
+}
+
+bool Router::check_outport_entry_in_move_registry(int outport) const
+{
+    for (auto *mi : move_registry) if (mi->outport == outport) return true;
+    return false;
+}
+
+void Router::update_move_vc_at_downstream_router(int vc, int outport)
+{
+    for (auto *mi : move_registry) {
+        if (mi->outport == outport) { mi->vc_at_downstream_router = vc; return; }
+    }
+}
+
+void Router::invalidate_move_vcs()
+{
+    for (auto *mi : move_registry) {
+        mi->vc_at_downstream_router = -1;
+        mi->tail_moved = false;
+        mi->cur_move_count = 0;
+    }
+}
+
+void Router::clear_move_registry()
+{
+    for (auto *mi : move_registry) {
+        getInputUnit(mi->inport)->thaw_vc(mi->vc);
+        delete mi;
+    }
+    move_registry.clear();
+}
+
+void Router::move_complete()
+{
+    reset_start_move();
+    reset_move_bit();
+    if (get_counter_state() == s_forward_progress) {
+        assert(move_registry.size() == 1);
+        assert(move_registry[0]->inport == (int)m_counter->cptr->input_port);
+        assert(move_registry[0]->vc == (int)m_counter->cptr->vc);
+        // After a complete move along the cycle, initiate check-probe to pivot cross-overs
+        send_check_probe(m_counter->cptr->input_port, m_counter->cptr->vc);
+        set_counter(m_counter->cptr->input_port, m_counter->cptr->vc, s_check_probe, 0);
+        clear_move_registry();
+        create_move_info_entry(m_counter->cptr->input_port, m_counter->cptr->vc, peek_path_top());
+    } else {
+        invalidate_move_vcs();
+    }
 }
 
 } // namespace garnet
