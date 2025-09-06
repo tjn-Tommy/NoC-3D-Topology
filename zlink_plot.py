@@ -51,7 +51,9 @@ DEFAULT_CSV = os.path.join(DEFAULT_RESULTS_DIR, "results.csv")
 DEFAULT_PLOT_DIR = os.path.join(DEFAULT_RESULTS_DIR, "plots")
 
 
-def resolve_paths_and_args(argv: list) -> Tuple[str, str, Optional[str], Optional[str], bool]:
+def resolve_paths_and_args(
+    argv: list,
+) -> Tuple[str, str, Optional[str], Optional[str], bool]:
     """Parse arguments and return (csv_path, out_dir, match_regex, traffic, per_topo)."""
     # Very small argparse replacement to keep the script lightweight and
     # backward-compatible with previous positional-only usage.
@@ -92,14 +94,19 @@ def resolve_paths_and_args(argv: list) -> Tuple[str, str, Optional[str], Optiona
             continue
         if f == "--match":
             if i + 1 >= len(flags):
-                print("ERROR: --match requires a REGEX argument", file=sys.stderr)
+                print(
+                    "ERROR: --match requires a REGEX argument", file=sys.stderr
+                )
                 sys.exit(1)
             match_regex = flags[i + 1]
             i += 2
             continue
         if f == "--traffic":
             if i + 1 >= len(flags):
-                print("ERROR: --traffic requires a NAME argument", file=sys.stderr)
+                print(
+                    "ERROR: --traffic requires a NAME argument",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
             traffic = flags[i + 1]
             i += 2
@@ -111,7 +118,13 @@ def resolve_paths_and_args(argv: list) -> Tuple[str, str, Optional[str], Optiona
 
 
 def main():
-    csv_path, out_dir, match_regex, opt_traffic, per_topo = resolve_paths_and_args(sys.argv)
+    (
+        csv_path,
+        out_dir,
+        match_regex,
+        opt_traffic,
+        per_topo,
+    ) = resolve_paths_and_args(sys.argv)
 
     if not os.path.exists(csv_path):
         print(f"ERROR: CSV not found at: {csv_path}", file=sys.stderr)
@@ -153,7 +166,10 @@ def main():
         df = df[df["Topology"].str.contains(r"_Z\d+$", regex=True)]
 
     if df.empty:
-        print("No matching TSV data found in CSV after filtering.", file=sys.stderr)
+        print(
+            "No matching TSV data found in CSV after filtering.",
+            file=sys.stderr,
+        )
         sys.exit(0)
 
     # Traffic selection
@@ -186,6 +202,7 @@ def main():
         drop=True
     )
 
+    # Match topo_plot.py style
     sns.set_theme(style="whitegrid", palette="deep")
 
     # Helpers for labeling, titles, and filename tagging
@@ -202,70 +219,61 @@ def main():
     def _plot_throughput(ax, groups, xcol="InjectionRate", ycol="Throughput"):
         for label, g in groups:
             g = g.sort_values([xcol])
-            ax.plot(
-                g[xcol],
-                g[ycol],
-                marker="o",
+            sns.lineplot(
+                data=g,
+                x=xcol,
+                y=ycol,
+                ax=ax,
                 label=label,
-            )
-            # Annotate peak throughput
-            idx = g[ycol].idxmax()
-            x_pk = g.loc[idx, xcol]
-            y_pk = g.loc[idx, ycol]
-            ax.scatter([x_pk], [y_pk], color=ax.lines[-1].get_color(), zorder=5)
-            ax.annotate(
-                f"peak {y_pk:.3f}@{x_pk:.3f}",
-                (x_pk, y_pk),
-                textcoords="offset points",
-                xytext=(6, 6),
-                fontsize=8,
+                marker="o",
+                dashes=False,
             )
         ax.set_xlabel("Injection Rate (pkts/node/cycle)")
         ax.set_ylabel("Throughput (accepted pkts/node/cycle)")
         ax.grid(True, linestyle="--", alpha=0.4)
-        ax.legend(title="Series")
+        ax.legend(title="Topology")
 
     # 2) Latency vs InjectionRate (linear)
-    def _plot_latency(ax, groups, xcol="InjectionRate", ycol="AvgTotalLatency"):
+    def _plot_latency(
+        ax, groups, xcol="InjectionRate", ycol="AvgTotalLatency"
+    ):
         for label, g in groups:
             g = g.sort_values([xcol])
-            ax.plot(
-                g[xcol],
-                g[ycol],
-                marker="s",
+            sns.lineplot(
+                data=g,
+                x=xcol,
+                y=ycol,
+                ax=ax,
                 label=label,
-            )
-            # annotate low-load latency
-            min_idx = g[xcol].idxmin()
-            x0 = g.loc[min_idx, xcol]
-            y0 = g.loc[min_idx, ycol]
-            ax.annotate(
-                f"low {y0:.1f}",
-                (x0, y0),
-                textcoords="offset points",
-                xytext=(6, 6),
-                fontsize=8,
+                marker="s",
+                dashes=False,
             )
         ax.set_xlabel("Injection Rate (pkts/node/cycle)")
         ax.set_ylabel("Average Packet Latency (cycles)")
         ax.set_ylim(bottom=0)
         ax.grid(True, linestyle="--", alpha=0.4)
-        ax.legend(title="Series")
+        ax.legend(title="Topology")
 
     # 3) Latency vs Throughput (useful for saturation view)
-    def _plot_latency_vs_tp(ax, groups, xcol="Throughput", ycol="AvgTotalLatency"):
+    def _plot_latency_vs_tp(
+        ax, groups, xcol="Throughput", ycol="AvgTotalLatency"
+    ):
         for label, g in groups:
             g = g.sort_values([xcol])
-            ax.plot(
-                g[xcol],
-                g[ycol],
-                marker="d",
+            sns.lineplot(
+                data=g,
+                x=xcol,
+                y=ycol,
+                ax=ax,
                 label=label,
+                marker="d",
+                dashes=False,
             )
         ax.set_xlabel("Throughput (accepted pkts/node/cycle)")
         ax.set_ylabel("Average Packet Latency (cycles)")
+        ax.set_ylim(bottom=0)
         ax.grid(True, linestyle="--", alpha=0.4)
-        ax.legend(title="Series")
+        ax.legend(title="Topology")
 
     saved_paths = []
 
@@ -276,117 +284,192 @@ def main():
             if df_b.empty:
                 continue
 
-            groups_tp = [( _label_for_per_topo(z), g) for z, g in df_b.groupby("z_tag")]
+            groups_tp = [
+                (_label_for_per_topo(z), g) for z, g in df_b.groupby("z_tag")
+            ]
 
             # Throughput vs Injection (linear)
-            fig, ax = plt.subplots(figsize=(12, 7))
+            fig, ax = plt.subplots(figsize=(8, 6))
             _plot_throughput(ax, groups_tp)
-            ax.set_title(f"Throughput vs Injection — {traffic}\n{base} (Z-latency sweep)")
-            out_tp = os.path.join(out_dir, f"{_sanitize(base)}_{_sanitize(traffic)}_throughput_vs_injection.png")
+            ax.set_title(
+                f"Throughput vs Injection Rate — {traffic}\n{base} (Z-latency sweep)",
+                fontsize=16,
+                fontweight="bold",
+            )
+            out_tp = os.path.join(
+                out_dir,
+                f"{_sanitize(base)}_{_sanitize(traffic)}_throughput_vs_injection.png",
+            )
             fig.savefig(out_tp, dpi=300, bbox_inches="tight")
             plt.close(fig)
             saved_paths.append(out_tp)
 
             # Throughput vs Injection (log-y)
-            fig, ax = plt.subplots(figsize=(12, 7))
+            fig, ax = plt.subplots(figsize=(8, 6))
             _plot_throughput(ax, groups_tp)
-            ymin = max(1e-6, float(np.nanmin(df_b["Throughput"].replace(0, np.nan))))
+            ymin = max(
+                1e-6, float(np.nanmin(df_b["Throughput"].replace(0, np.nan)))
+            )
             ax.set_yscale("log")
             ax.set_ylim(bottom=ymin)
-            ax.set_title(f"Throughput vs Injection (log-y) — {traffic}\n{base} (Z-latency sweep)")
-            out_tp_logy = os.path.join(out_dir, f"{_sanitize(base)}_{_sanitize(traffic)}_throughput_vs_injection_logy.png")
+            ax.grid(True, which="both", linestyle="--", alpha=0.4)
+            ax.set_title(
+                f"Throughput vs Injection Rate (log-y) — {traffic}\n{base} (Z-latency sweep)",
+                fontsize=16,
+                fontweight="bold",
+            )
+            out_tp_logy = os.path.join(
+                out_dir,
+                f"{_sanitize(base)}_{_sanitize(traffic)}_throughput_vs_injection_logy.png",
+            )
             fig.savefig(out_tp_logy, dpi=300, bbox_inches="tight")
             plt.close(fig)
             saved_paths.append(out_tp_logy)
 
             # Latency vs Injection (linear)
-            fig, ax = plt.subplots(figsize=(12, 7))
+            fig, ax = plt.subplots(figsize=(8, 6))
             _plot_latency(ax, groups_tp)
-            ax.set_title(f"Latency vs Injection — {traffic}\n{base} (Z-latency sweep)")
-            out_lat = os.path.join(out_dir, f"{_sanitize(base)}_{_sanitize(traffic)}_latency_vs_injection.png")
+            ax.set_title(
+                f"Latency vs Injection Rate — {traffic}\n{base} (Z-latency sweep)",
+                fontsize=16,
+                fontweight="bold",
+            )
+            out_lat = os.path.join(
+                out_dir,
+                f"{_sanitize(base)}_{_sanitize(traffic)}_latency_vs_injection.png",
+            )
             fig.savefig(out_lat, dpi=300, bbox_inches="tight")
             plt.close(fig)
             saved_paths.append(out_lat)
 
             # Latency vs Injection (log-y)
-            fig, ax = plt.subplots(figsize=(12, 7))
+            fig, ax = plt.subplots(figsize=(8, 6))
             _plot_latency(ax, groups_tp)
-            ymin_lat = max(1e-3, float(np.nanmin(df_b["AvgTotalLatency"].replace(0, np.nan))))
+            ymin_lat = max(
+                1e-3,
+                float(np.nanmin(df_b["AvgTotalLatency"].replace(0, np.nan))),
+            )
             ax.set_yscale("log")
             ax.set_ylim(bottom=ymin_lat)
-            ax.set_title(f"Latency vs Injection (log-y) — {traffic}\n{base} (Z-latency sweep)")
-            out_lat_logy = os.path.join(out_dir, f"{_sanitize(base)}_{_sanitize(traffic)}_latency_vs_injection_logy.png")
+            ax.grid(True, which="both", linestyle="--", alpha=0.4)
+            ax.set_title(
+                f"Latency vs Injection Rate (log-y) — {traffic}\n{base} (Z-latency sweep)",
+                fontsize=16,
+                fontweight="bold",
+            )
+            out_lat_logy = os.path.join(
+                out_dir,
+                f"{_sanitize(base)}_{_sanitize(traffic)}_latency_vs_injection_logy.png",
+            )
             fig.savefig(out_lat_logy, dpi=300, bbox_inches="tight")
             plt.close(fig)
             saved_paths.append(out_lat_logy)
 
             # Latency vs Throughput
-            fig, ax = plt.subplots(figsize=(12, 7))
+            fig, ax = plt.subplots(figsize=(8, 6))
             _plot_latency_vs_tp(ax, groups_tp)
-            ax.set_title(f"Latency vs Throughput — {traffic}\n{base} (Z-latency sweep)")
-            out_lvt = os.path.join(out_dir, f"{_sanitize(base)}_{_sanitize(traffic)}_latency_vs_throughput.png")
+            ax.set_title(
+                f"Latency vs Throughput — {traffic}\n{base} (Z-latency sweep)",
+                fontsize=16,
+                fontweight="bold",
+            )
+            out_lvt = os.path.join(
+                out_dir,
+                f"{_sanitize(base)}_{_sanitize(traffic)}_latency_vs_throughput.png",
+            )
             fig.savefig(out_lvt, dpi=300, bbox_inches="tight")
             plt.close(fig)
             saved_paths.append(out_lvt)
     else:
         # Combined figures across all matching topologies; legend shows full topology
-        groups_all = [( _label_for_combined(topo), g) for topo, g in df_t.groupby("Topology")]
+        groups_all = [
+            (_label_for_combined(topo), g)
+            for topo, g in df_t.groupby("Topology")
+        ]
 
         # Throughput vs Injection (linear)
-        fig, ax = plt.subplots(figsize=(12, 7))
+        fig, ax = plt.subplots(figsize=(8, 6))
         _plot_throughput(ax, groups_all)
         ax.set_title(
-            f"Throughput vs Injection — {traffic}\nTopologies: {', '.join(sorted(df_t['base_topo'].unique()))}"
+            f"Throughput vs Injection Rate — {traffic}\nTopologies: {', '.join(sorted(df_t['base_topo'].unique()))}",
+            fontsize=16,
+            fontweight="bold",
         )
-        out_tp = os.path.join(out_dir, "tsv_latency_sweep_throughput_vs_injection.png")
+        out_tp = os.path.join(
+            out_dir, "tsv_latency_sweep_throughput_vs_injection.png"
+        )
         fig.savefig(out_tp, dpi=300, bbox_inches="tight")
         plt.close(fig)
         saved_paths.append(out_tp)
 
         # Throughput vs Injection (log-y)
-        fig, ax = plt.subplots(figsize=(12, 7))
+        fig, ax = plt.subplots(figsize=(8, 6))
         _plot_throughput(ax, groups_all)
-        ymin = max(1e-6, float(np.nanmin(df_t["Throughput"].replace(0, np.nan))))
+        ymin = max(
+            1e-6, float(np.nanmin(df_t["Throughput"].replace(0, np.nan)))
+        )
         ax.set_yscale("log")
         ax.set_ylim(bottom=ymin)
+        ax.grid(True, which="both", linestyle="--", alpha=0.4)
         ax.set_title(
-            f"Throughput vs Injection (log-y) — {traffic}\nTopologies: {', '.join(sorted(df_t['base_topo'].unique()))}"
+            f"Throughput vs Injection Rate (log-y) — {traffic}\nTopologies: {', '.join(sorted(df_t['base_topo'].unique()))}",
+            fontsize=16,
+            fontweight="bold",
         )
-        out_tp_logy = os.path.join(out_dir, "tsv_latency_sweep_throughput_vs_injection_logy.png")
+        out_tp_logy = os.path.join(
+            out_dir, "tsv_latency_sweep_throughput_vs_injection_logy.png"
+        )
         fig.savefig(out_tp_logy, dpi=300, bbox_inches="tight")
         plt.close(fig)
         saved_paths.append(out_tp_logy)
 
         # Latency vs Injection (linear)
-        fig, ax = plt.subplots(figsize=(12, 7))
+        fig, ax = plt.subplots(figsize=(8, 6))
         _plot_latency(ax, groups_all)
         ax.set_title(
-            f"Latency vs Injection — {traffic}\nTopologies: {', '.join(sorted(df_t['base_topo'].unique()))}"
+            f"Latency vs Injection Rate — {traffic}\nTopologies: {', '.join(sorted(df_t['base_topo'].unique()))}",
+            fontsize=16,
+            fontweight="bold",
         )
-        out_lat = os.path.join(out_dir, "tsv_latency_sweep_latency_vs_injection.png")
+        out_lat = os.path.join(
+            out_dir, "tsv_latency_sweep_latency_vs_injection.png"
+        )
         fig.savefig(out_lat, dpi=300, bbox_inches="tight")
         plt.close(fig)
         saved_paths.append(out_lat)
 
         # Latency vs Injection (log-y)
-        fig, ax = plt.subplots(figsize=(12, 7))
+        fig, ax = plt.subplots(figsize=(8, 6))
         _plot_latency(ax, groups_all)
-        ymin_lat = max(1e-3, float(np.nanmin(df_t["AvgTotalLatency"].replace(0, np.nan))))
+        ymin_lat = max(
+            1e-3, float(np.nanmin(df_t["AvgTotalLatency"].replace(0, np.nan)))
+        )
         ax.set_yscale("log")
         ax.set_ylim(bottom=ymin_lat)
+        ax.grid(True, which="both", linestyle="--", alpha=0.4)
         ax.set_title(
-            f"Latency vs Injection (log-y) — {traffic}\nTopologies: {', '.join(sorted(df_t['base_topo'].unique()))}"
+            f"Latency vs Injection Rate (log-y) — {traffic}\nTopologies: {', '.join(sorted(df_t['base_topo'].unique()))}",
+            fontsize=16,
+            fontweight="bold",
         )
-        out_lat_logy = os.path.join(out_dir, "tsv_latency_sweep_latency_vs_injection_logy.png")
+        out_lat_logy = os.path.join(
+            out_dir, "tsv_latency_sweep_latency_vs_injection_logy.png"
+        )
         fig.savefig(out_lat_logy, dpi=300, bbox_inches="tight")
         plt.close(fig)
         saved_paths.append(out_lat_logy)
 
         # Latency vs Throughput
-        fig, ax = plt.subplots(figsize=(12, 7))
+        fig, ax = plt.subplots(figsize=(8, 6))
         _plot_latency_vs_tp(ax, groups_all)
-        ax.set_title(f"Latency vs Throughput — {traffic}")
-        out_lvt = os.path.join(out_dir, "tsv_latency_sweep_latency_vs_throughput.png")
+        ax.set_title(
+            f"Latency vs Throughput — {traffic}",
+            fontsize=16,
+            fontweight="bold",
+        )
+        out_lvt = os.path.join(
+            out_dir, "tsv_latency_sweep_latency_vs_throughput.png"
+        )
         fig.savefig(out_lvt, dpi=300, bbox_inches="tight")
         plt.close(fig)
         saved_paths.append(out_lvt)
