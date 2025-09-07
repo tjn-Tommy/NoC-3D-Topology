@@ -1,6 +1,3 @@
-# Copyright (c) 2025
-# All rights reserved.
-#
 # Sparse-Vertical 3D (Pillar-based) topology with Torus links for Garnet 3.0
 
 from m5.params import *

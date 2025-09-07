@@ -1,16 +1,4 @@
 # configs/topologies/Hier3D_ClusterHub.py
-# ----------------------------------------------------------------------
-# Hierarchical 3D Cluster + Hub topology.
-# - Each 2x2 group of horizontal routers (HRs) connects to one Hub Router (HBR)
-#   located at the cluster's geometric center.
-# - Only HBRs form the 3D backbone: a 2x2xZ mesh among hubs (XY within a layer,
-#   Z across layers). HRs do not directly connect to other HRs.
-# - External nodes (controllers) attach only to HRs.
-# - Link weights follow DOR-friendly ordering to keep routing deadlock-free
-#   using TABLE_ routing: HR<->HBR weight=1, Hub X=1, Hub Y=2, Hub Z=3.
-# - Vertical (TSV) latency is scaled via --tsv-slowdown / --tsv-speedup.
-# - Optional hub router speedup via HUB_SPEEDUP to model faster hubs.
-# ----------------------------------------------------------------------
 
 from m5.params import *
 from m5.objects import *
