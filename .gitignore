@@ -36,5 +36,4 @@ lab4/
 AGENTS.md
 .gitignore
 hop_analysis.py
-configs/topologies/HyperX3D.py
 m5out*/
