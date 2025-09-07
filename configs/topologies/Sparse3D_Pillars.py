@@ -1,5 +1,4 @@
 # configs/topologies/Sparse3D_Pillars.py
-# Sparse-Vertical 3D (Pillar-based) topology for Garnet 3.0
 
 from m5.params import *
 from m5.objects import *
@@ -14,8 +13,6 @@ class Sparse3D_Pillars(SimpleTopology):
     def __init__(self, controllers):
         self.nodes = controllers
 
-    # 判断 (x,y) 是否是“柱子坐标”
-
     def makeTopology(self, options, network, IntLink, ExtLink, Router):
         nodes = self.nodes
         num_routers = options.num_cpus
@@ -27,13 +24,13 @@ class Sparse3D_Pillars(SimpleTopology):
         WXP, WYP, WZP = 1, 2, 3
         WXN, WYN, WZN = 1, 2, 3
         X, Y, Z = 4, 4, 4
-        # 垂直链路延迟近似（只影响延迟，不影响权重）
-        # 语义：Z 延迟 = link_latency * SLOWDOWN / SPEEDUP
-        # SLOWDOWN: k>=1（默认 4）
-        # SPEEDUP:  m>=1（默认 1）
+
+        # SLOWDOWN: k>=1
+        # SPEEDUP:  m>=1
         V_SLOWDOWN = max(1, int(getattr(options, "tsv_slowdown", 4)))
         V_SPEEDUP = max(1, int(getattr(options, "tsv_speedup", 1)))
-        # ------------------------------------
+
+        # ----- Configuration Parameters -----
 
         assert (
             num_routers == X * Y * Z
@@ -44,19 +41,17 @@ class Sparse3D_Pillars(SimpleTopology):
                 PX % 2 == 0 and PY % 2 == 0
             ), "Staggered layout requires even spacing"
 
-        # ----- Helper Functions -----
         def _is_pillar_xy(x, y):
             return (x % max(1, PX) == 0) and (y % max(1, PY) == 0)
 
         def _idx(x, y, z):
             return z * (X * Y) + y * X + x
 
-        # --- add helpers near the top of makeTopology() ---
         def nearest_pillar_xy(x, y):
-            # pillars at (k*PX, l*PY)
+
             px = round(x / PX) * PX
             py = round(y / PY) * PY
-            # clamp to grid [0..X-1],[0..Y-1]
+
             px = max(0, min(X - 1, px))
             py = max(0, min(Y - 1, py))
             return px, py
@@ -67,8 +62,10 @@ class Sparse3D_Pillars(SimpleTopology):
 
         # ----- Link Latencies -----
         link_latency = options.link_latency
-        # 将 Z 向链路延迟放大为普通链路的 VLINK_SLOWDOWN 倍
-        vlink_latency = max(1, int(link_latency) * V_SLOWDOWN // max(1, V_SPEEDUP))
+
+        vlink_latency = max(
+            1, int(link_latency) * V_SLOWDOWN // max(1, V_SPEEDUP)
+        )
         router_latency = options.router_latency
 
         # ----- Router Creation -----
@@ -83,7 +80,7 @@ class Sparse3D_Pillars(SimpleTopology):
         link_count = 0
 
         # ----- External Links -----
-        # Distribute controllers uniformly across routers (same as Mesh_XY)
+
         network_nodes = []
         remainder_nodes = []
         for node_index in range(len(nodes)):
@@ -126,13 +123,12 @@ class Sparse3D_Pillars(SimpleTopology):
         # ----- Internal Links -----
         int_links = []
 
-        # East-West (+X / -X) links
         for z in range(Z):
             for y in range(Y):
                 for x in range(X - 1):
                     a = _idx(x, y, z)
                     b = _idx(x + 1, y, z)
-                    # if going East reduces distance to nearest pillar => toward
+
                     int_links.append(
                         IntLink(
                             link_id=link_count,
@@ -158,7 +154,6 @@ class Sparse3D_Pillars(SimpleTopology):
                     )
                     link_count += 1
 
-        # North-South (+Y / -Y) links
         for z in range(Z):
             for x in range(X):
                 for y in range(Y - 1):
@@ -200,11 +195,11 @@ class Sparse3D_Pillars(SimpleTopology):
                         if x % PX == 0 and y % PY == 0:
                             is_pillar_location = True
                     elif LAYOUT_MODE == "staggered":
-                        # On even layers, use the aligned pattern
+
                         if z % 2 == 0:
                             if x % PX == 0 and y % PY == 0:
                                 is_pillar_location = True
-                        # On odd layers, use the offset pattern
+
                         else:  # z is odd
                             if (x + PX // 2) % PX == 0 and (
                                 y + PY // 2
@@ -246,7 +241,6 @@ class Sparse3D_Pillars(SimpleTopology):
         int_links.extend(int_links_z)
         network.int_links = int_links
 
-    # 文件系统注册（与官方 Mesh_XY 一致）
     def registerTopology(self, options):
         for i in range(options.num_cpus):
             FileSystemConfig.register_node(
