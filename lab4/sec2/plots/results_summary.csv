@@ -1,0 +1,7 @@
+Traffic,Topology,PeakThroughput,InjectionAtPeakTP,LowLoadInjection,LowLoadLatency,KneeFactor,KneeInjectionRate
+neighbor,Cluster3D_Hub,0.249869,0.5,0.02,10.0295,2.0,
+neighbor,Mesh3D_XYZ,0.249878,0.5,0.02,8.5174,2.0,
+transpose,Cluster3D_Hub,0.099113,0.2,0.02,13.9456,2.0,0.2
+transpose,Mesh3D_XYZ,0.203333,0.5,0.02,12.5455,2.0,0.34
+uniform_random,Cluster3D_Hub,0.149818,0.3,0.02,14.377,2.0,0.32
+uniform_random,Mesh3D_XYZ,0.249803,0.5,0.02,12.5398,2.0,

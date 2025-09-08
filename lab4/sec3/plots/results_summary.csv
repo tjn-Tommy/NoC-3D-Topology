@@ -1,0 +1,13 @@
+Traffic,Topology,PeakThroughput,InjectionAtPeakTP,LowLoadInjection,LowLoadLatency,KneeFactor,KneeInjectionRate
+neighbor,Cluster3D_Hub,0.249878,0.5,0.02,8.5174,2.0,
+neighbor,Hier3D_Chiplet,0.249873,0.5,0.02,9.0082,2.0,
+neighbor,Mesh3D_XYZ,0.249878,0.5,0.02,8.5174,2.0,
+neighbor,Sparse3D_Pillars,0.249878,0.5,0.02,8.5174,2.0,
+transpose,Cluster3D_Hub,0.17745,0.5,0.02,13.5519,2.0,0.26
+transpose,Hier3D_Chiplet,0.175648,0.5,0.02,13.0606,2.0,0.3
+transpose,Mesh3D_XYZ,0.203333,0.5,0.02,12.5455,2.0,0.34
+transpose,Sparse3D_Pillars,0.162499,0.5,0.02,13.0652,2.0,0.22
+uniform_random,Cluster3D_Hub,0.159751,0.32,0.02,13.6897,2.0,0.34
+uniform_random,Hier3D_Chiplet,0.163661,0.36,0.02,13.4316,2.0,0.34
+uniform_random,Mesh3D_XYZ,0.249803,0.5,0.02,12.5398,2.0,
+uniform_random,Sparse3D_Pillars,0.113357,0.24,0.02,13.3412,2.0,0.24
